@@ -1,32 +1,46 @@
 use promptbox_core::{
     clear_spool_events, parse_local_endpoint, read_spool_events, AppStatus, ArchiveSessionOutcome,
-    ClaudeHookStatus, CodexHookStatus, DraftState, PromptEvent, PromptHistory, PromptSearchResults,
-    PromptStore, RuntimeState, SessionList, HOOK_EVENTS_PATH, MAX_HOOK_BODY_BYTES,
+    ClaudeHookStatus, CodexHookStatus, DraftState, PromptBoxConfig, PromptEvent, PromptHistory,
+    PromptSearchResults, PromptStore, RuntimeState, SessionList, HOOK_EVENTS_PATH,
+    MAX_HOOK_BODY_BYTES,
 };
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
-use tauri::Manager;
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager, WindowEvent,
+};
 use tauri_plugin_positioner::{Position, WindowExt};
 
 struct StartupState {
     status: Mutex<AppStatus>,
     prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
+    recording_paused: Arc<AtomicBool>,
     store: Option<PromptStore>,
 }
 
 #[tauri::command]
 fn app_status(state: tauri::State<'_, StartupState>) -> AppStatus {
+    current_app_status(state.inner())
+}
+
+fn current_app_status(state: &StartupState) -> AppStatus {
     let mut status = state
         .status
         .lock()
         .map(|status| status.clone())
         .unwrap_or_else(|_| promptbox_core::app_status_from_error("应用状态锁已损坏".to_string()));
 
+    status.recording_paused = state.recording_paused.load(Ordering::SeqCst);
     if let Ok(events) = state.prompt_events.lock() {
         status.received_prompt_events = events.len();
     }
@@ -141,6 +155,24 @@ fn search_prompts(
 }
 
 #[tauri::command]
+fn set_recording_paused(
+    state: tauri::State<'_, StartupState>,
+    paused: bool,
+) -> Result<AppStatus, String> {
+    let paths = promptbox_core::resolve_promptbox_paths()?;
+    let (mut config, _) = PromptBoxConfig::load_or_create(&paths.config_path)?;
+    config.recording_paused = paused;
+    config.write(&paths.config_path)?;
+
+    state.recording_paused.store(paused, Ordering::SeqCst);
+    if let Ok(mut status) = state.status.lock() {
+        status.recording_paused = paused;
+    }
+
+    Ok(current_app_status(state.inner()))
+}
+
+#[tauri::command]
 fn claude_hook_status() -> Result<ClaudeHookStatus, String> {
     let paths = promptbox_core::resolve_promptbox_paths()?;
     promptbox_core::detect_claude_user_hook(&paths.hook_binary_path)
@@ -167,6 +199,12 @@ fn install_codex_hook() -> Result<CodexHookStatus, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .setup(|app| {
             let startup_state = initialize_startup_state();
             app.manage(startup_state);
@@ -180,6 +218,8 @@ pub fn run() {
                 }
             }
 
+            setup_tray(app)?;
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -191,6 +231,7 @@ pub fn run() {
             mark_draft_copied,
             list_prompt_history,
             search_prompts,
+            set_recording_paused,
             claude_hook_status,
             install_claude_hook,
             codex_hook_status,
@@ -200,16 +241,63 @@ pub fn run() {
         .expect("error while running PromptHarbor");
 }
 
+fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open", "打开主窗口", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 PromptHarbor", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let mut tray = TrayIconBuilder::new()
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("提示港 PromptHarbor")
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+
+    tray.build(app)?;
+    Ok(())
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 fn initialize_startup_state() -> StartupState {
     let prompt_events = Arc::new(Mutex::new(Vec::new()));
+    let recording_paused = Arc::new(AtomicBool::new(false));
     let (status, store) = match promptbox_core::initialize_runtime() {
-        Ok(runtime) => initialize_runtime_dependent_state(&runtime, Arc::clone(&prompt_events)),
+        Ok(runtime) => initialize_runtime_dependent_state(
+            &runtime,
+            Arc::clone(&prompt_events),
+            Arc::clone(&recording_paused),
+        ),
         Err(error) => (promptbox_core::app_status_from_error(error), None),
     };
+    recording_paused.store(status.recording_paused, Ordering::SeqCst);
 
     StartupState {
         status: Mutex::new(status),
         prompt_events,
+        recording_paused,
         store,
     }
 }
@@ -217,8 +305,10 @@ fn initialize_startup_state() -> StartupState {
 fn initialize_runtime_dependent_state(
     runtime: &RuntimeState,
     prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
+    recording_paused: Arc<AtomicBool>,
 ) -> (AppStatus, Option<PromptStore>) {
     let mut status = runtime.app_status();
+    recording_paused.store(runtime.config.recording_paused, Ordering::SeqCst);
     let store = PromptStore::new(runtime.paths.database_path.clone());
 
     match store.initialize() {
@@ -284,6 +374,7 @@ fn initialize_runtime_dependent_state(
         &runtime.config.token,
         store.clone(),
         Arc::clone(&prompt_events),
+        recording_paused,
     ) {
         Ok(message) => {
             status.collector_ready = true;
@@ -304,6 +395,7 @@ fn start_local_collector(
     token: &str,
     store: PromptStore,
     prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
+    recording_paused: Arc<AtomicBool>,
 ) -> Result<String, String> {
     let addr = parse_local_endpoint(endpoint)?;
     let listener = TcpListener::bind(addr)
@@ -321,9 +413,16 @@ fn start_local_collector(
             let token = token.clone();
             let store = store.clone();
             let prompt_events = Arc::clone(&prompt_events);
+            let recording_paused = Arc::clone(&recording_paused);
 
             thread::spawn(move || {
-                handle_collector_connection(stream, &token, &store, prompt_events);
+                handle_collector_connection(
+                    stream,
+                    &token,
+                    &store,
+                    prompt_events,
+                    recording_paused,
+                );
             });
         }
     });
@@ -336,9 +435,10 @@ fn handle_collector_connection(
     token: &str,
     store: &PromptStore,
     prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
+    recording_paused: Arc<AtomicBool>,
 ) {
     let response = match read_http_request(&mut stream) {
-        Ok(request) => process_hook_request(request, token, store, prompt_events),
+        Ok(request) => process_hook_request(request, token, store, prompt_events, recording_paused),
         Err(error) => HttpResponse::new(400, "Bad Request", error),
     };
 
@@ -350,6 +450,7 @@ fn process_hook_request(
     token: &str,
     store: &PromptStore,
     prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
+    recording_paused: Arc<AtomicBool>,
 ) -> HttpResponse {
     if request.method != "POST" || request.path != HOOK_EVENTS_PATH {
         return HttpResponse::new(404, "Not Found", "未知采集路径".to_string());
@@ -358,6 +459,10 @@ fn process_hook_request(
     let expected = format!("Bearer {token}");
     if header_value(&request.headers, "authorization") != Some(expected.as_str()) {
         return HttpResponse::new(401, "Unauthorized", "token 校验失败".to_string());
+    }
+
+    if recording_paused.load(Ordering::SeqCst) {
+        return HttpResponse::new(204, "No Content", String::new());
     }
 
     let event = match serde_json::from_slice::<PromptEvent>(&request.body) {

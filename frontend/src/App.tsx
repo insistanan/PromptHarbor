@@ -154,6 +154,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [installingClaude, setInstallingClaude] = useState(false);
   const [installingCodex, setInstallingCodex] = useState(false);
+  const [updatingPause, setUpdatingPause] = useState(false);
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [draftContent, setDraftContent] = useState('');
   const [draftSessionKey, setDraftSessionKey] = useState<string | null>(null);
@@ -269,6 +270,16 @@ export function App() {
       })
       .catch((reason) => setError(String(reason)))
       .finally(() => setInstallingCodex(false));
+  };
+  const setRecordingPaused = (paused: boolean) => {
+    setUpdatingPause(true);
+    invoke<AppStatus>('set_recording_paused', { paused })
+      .then((nextStatus) => {
+        setStatus(nextStatus);
+        setError(null);
+      })
+      .catch((reason) => setError(String(reason)))
+      .finally(() => setUpdatingPause(false));
   };
   const selectedSessionKey = selectedSession
     ? sessionKey(selectedSession.provider, selectedSession.sessionId)
@@ -579,6 +590,7 @@ export function App() {
           <div className="status-strip" aria-label="应用状态">
             <span>{status?.version ? `v${status.version}` : '版本读取中'}</span>
             <span>{status?.localEndpoint ?? '采集端点待连接'}</span>
+            <span>{status?.recordingPaused ? '记录暂停' : '记录开启'}</span>
             <span>
               {status ? (status.collectorReady ? '采集就绪' : '采集不可用') : '采集状态读取中'}
             </span>
@@ -589,7 +601,15 @@ export function App() {
         <section className="runtime-panel" aria-label="本地运行时状态">
           <div className="section-heading">
             <h3>本地运行时</h3>
-            <span>{status?.configReady ? '配置就绪' : '配置异常'}</span>
+            <label className="check-control">
+              <input
+                checked={status?.recordingPaused ?? false}
+                disabled={!status?.configReady || updatingPause}
+                onChange={(event) => setRecordingPaused(event.currentTarget.checked)}
+                type="checkbox"
+              />
+              暂停记录
+            </label>
           </div>
           <dl className="runtime-list">
             <div>
@@ -620,6 +640,12 @@ export function App() {
               <dt>采集端点</dt>
               <dd className={status?.collectorReady ? 'ok-text' : 'warning-text'}>
                 {status?.collectorMessage ?? '等待启动'}
+              </dd>
+            </div>
+            <div>
+              <dt>记录状态</dt>
+              <dd className={status?.recordingPaused ? 'warning-text' : 'ok-text'}>
+                {status?.recordingPaused ? '已暂停，不写入 prompt' : '记录中'}
               </dd>
             </div>
             <div>
