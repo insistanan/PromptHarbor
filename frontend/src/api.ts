@@ -81,28 +81,18 @@ export function updateRuntimeConfig<T>(payload: {
   return invoke<T>('update_runtime_config', payload);
 }
 
-export function getClaudeHookStatus<T>() {
-  return invoke<T>('claude_hook_status');
+export type HookProvider = 'claude' | 'codex';
+
+export function getHookStatus<T>(provider: HookProvider) {
+  return invoke<T>('hook_status', { provider });
 }
 
-export function installClaudeHook<T>() {
-  return invoke<T>('install_claude_hook');
+export function installHook<T>(provider: HookProvider) {
+  return invoke<T>('install_hook', { provider });
 }
 
-export function uninstallClaudeHook<T>() {
-  return invoke<T>('uninstall_claude_hook');
-}
-
-export function getCodexHookStatus<T>() {
-  return invoke<T>('codex_hook_status');
-}
-
-export function installCodexHook<T>() {
-  return invoke<T>('install_codex_hook');
-}
-
-export function uninstallCodexHook<T>() {
-  return invoke<T>('uninstall_codex_hook');
+export function uninstallHook<T>(provider: HookProvider) {
+  return invoke<T>('uninstall_hook', { provider });
 }
 
 export function openProjectPath(payload: { path: string }) {

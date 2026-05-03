@@ -4,7 +4,7 @@
 
 ## 项目状态
 
-当前 MVP 核心闭环已在 Windows 环境完成一轮实机验证，仓库包含 Tauri + React + Rust workspace 的可运行实现。
+当前 MVP 核心闭环已在 Windows 环境完成一轮实机验证，仓库包含 Tauri + React + Rust workspace 的可运行实现。近期代码已完成一轮架构拆分：后端按运行时、hook 适配、采集、存储、检索拆分；前端按会话、草稿、历史、搜索、设置拆分。
 
 已确认的 MVP 目标：
 
@@ -16,15 +16,49 @@
 - 默认本地优先、不联网、不调用外部大模型 API。
 - 支持全局暂停记录。
 - 支持系统托盘常驻。
+- 支持 prompt 图片附件采集、历史图片读取和缺图提示。
+- 支持会话、历史 prompt、当前草稿的全局搜索。
 
 ## 开发启动
 
 当前实现包含：
 
-- `crates/promptbox-core`：共享领域类型和应用状态。
+- `crates/promptbox-core`：共享领域类型、运行时配置、hook 适配、SQLite 存储、会话/草稿/历史检索和附件处理。
 - `crates/promptbox-hook`：Claude Code / Codex CLI 调用的轻量采集器，支持 `--version`、本地端点投递和 spool fallback。
-- `crates/promptbox-app`：Tauri 应用、本地采集端点、SQLite 持久化、hook 配置向导、托盘和窗口生命周期。
-- `frontend`：React + Vite + Milkdown 会话工作区，支持草稿、复制、历史、搜索和暂停记录。
+- `crates/promptbox-app`：Tauri 应用、本地采集端点、采集入库、命令层、托盘、窗口生命周期和开机启动。
+- `frontend`：React + Vite + Milkdown 工作区，支持会话浏览、草稿编辑、图片暂存、历史查看、搜索和运行设置。
+
+## 当前代码结构
+
+后端核心模块：
+
+- `crates/promptbox-core/src/runtime/`：路径、配置、运行状态等本地运行时能力。
+- `crates/promptbox-core/src/hook_adapter.rs`：Claude Code 与 Codex CLI 的统一 hook 适配接口。
+- `crates/promptbox-core/src/claude/`、`crates/promptbox-core/src/codex/`：各 Agent 客户端的 hook 配置、状态检测和测试。
+- `crates/promptbox-core/src/hook_binary/`：hook 可执行文件查找、版本检查、复制和状态报告。
+- `crates/promptbox-core/src/event/`：hook 事件规范化、spool fallback 和本地端点配置。
+- `crates/promptbox-core/src/store/`：SQLite 表结构、类型、文本工具、会话、草稿、检索和附件。
+- `crates/promptbox-core/src/store/attachments/`：图片附件提取、文件保存、历史读取、数据地址解析和缺图判定。
+- `crates/promptbox-core/src/store/retrieval/`：历史查询和全局搜索。搜索内部按会话、已发送 prompt、草稿分别查询，再统一排序截断。
+
+Tauri 应用模块：
+
+- `crates/promptbox-app/src/local_http.rs`：本地 HTTP 请求解析。
+- `crates/promptbox-app/src/collector.rs`：采集端点、token 校验和暂停判断。
+- `crates/promptbox-app/src/ingestion.rs`：采集事件入库。
+- `crates/promptbox-app/src/commands/`：状态、会话、草稿、历史、hook、运行时和桌面命令。
+- `crates/promptbox-app/src/startup.rs`、`state.rs`、`desktop.rs`、`autostart.rs`：启动、共享状态、窗口/托盘和开机启动。
+
+前端模块：
+
+- `frontend/src/features/app/`：应用轮询状态。
+- `frontend/src/features/sessions/`：会话列表、会话详情和历史状态。
+- `frontend/src/features/drafts/`：草稿工作区、草稿状态、右键菜单、图片暂存和图片操作。
+- `frontend/src/features/history/`：历史 prompt 列表、历史图片读取和图片条展示。
+- `frontend/src/features/search/`：全局搜索界面。
+- `frontend/src/features/settings/`：运行状态、运行配置和 hook 设置。
+- `frontend/src/features/shared/`：共享弹窗等通用界面。
+- `frontend/src/types/`：按运行时、会话、草稿、历史和界面状态拆分的前端类型；`frontend/src/appTypes.ts` 继续作为统一导出入口。
 
 PromptBox home 默认路径：
 
