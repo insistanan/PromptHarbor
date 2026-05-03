@@ -87,9 +87,51 @@ pub fn install_codex_user_hook(hook_path: &Path) -> Result<CodexHookStatus, Stri
         hook_installed: true,
         codex_hooks_enabled: true,
         ready: true,
-        message: "Codex CLI 用户级 hook 已安装，codex_hooks 已开启".to_string(),
+        message: "Codex CLI 用户级 hook 已安装，codex_hooks 已开启；已运行的 Codex CLI 需要新开窗口后生效"
+            .to_string(),
         hooks_backup_path: hooks_backup_path.as_ref().map(|path| path_to_string(path)),
         config_backup_path: config_backup_path.as_ref().map(|path| path_to_string(path)),
+    })
+}
+
+pub fn uninstall_codex_user_hook(hook_path: &Path) -> Result<CodexHookStatus, String> {
+    let paths = codex_user_paths()?;
+    let expected_command = codex_hook_command(hook_path);
+
+    let mut hooks_backup_path = None;
+    let mut hook_removed = false;
+    if paths.hooks_path.exists() {
+        let mut hooks_root = read_json(&paths.hooks_path)?;
+        hook_removed = has_promptbox_codex_hook(&hooks_root, &expected_command)
+            || has_stale_promptbox_codex_hook(&hooks_root, &expected_command);
+        hooks_backup_path = Some(backup_file(&paths.hooks_path)?);
+        remove_promptbox_codex_hooks(&mut hooks_root);
+        prune_empty_hooks_root(&mut hooks_root);
+        write_json(&paths.hooks_path, &hooks_root)?;
+    }
+
+    let codex_hooks_enabled = if paths.config_path.exists() {
+        let config_root = read_toml(&paths.config_path)?;
+        codex_hooks_enabled(&config_root)
+    } else {
+        false
+    };
+
+    Ok(CodexHookStatus {
+        hooks_path: path_to_string(&paths.hooks_path),
+        config_path: path_to_string(&paths.config_path),
+        expected_command,
+        hook_installed: false,
+        codex_hooks_enabled,
+        ready: false,
+        message: if hook_removed {
+            "Codex CLI PromptHarbor hook 已取消；codex_hooks 开关保持原样，其他 hook 不受影响"
+                .to_string()
+        } else {
+            "未发现 Codex CLI PromptHarbor hook；codex_hooks 开关保持原样".to_string()
+        },
+        hooks_backup_path: hooks_backup_path.as_ref().map(|path| path_to_string(path)),
+        config_backup_path: None,
     })
 }
 
@@ -110,7 +152,18 @@ fn codex_user_paths() -> Result<CodexUserPaths, String> {
 }
 
 fn codex_hook_command(hook_path: &Path) -> String {
-    format!("\"{}\" --provider codex", hook_path.to_string_lossy())
+    hook_command(hook_path, "codex")
+}
+
+fn hook_command(hook_path: &Path, provider: &str) -> String {
+    if cfg!(windows) {
+        format!(
+            "cmd /d /s /c \"\"{}\" --provider {provider} || exit /b 0\"",
+            hook_path.to_string_lossy()
+        )
+    } else {
+        format!("\"{}\" --provider {provider}", hook_path.to_string_lossy())
+    }
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
@@ -294,6 +347,44 @@ fn remove_promptbox_codex_hooks(root: &mut Value) {
     }
 }
 
+fn prune_empty_hooks_root(root: &mut Value) {
+    let Some(object) = root.as_object_mut() else {
+        return;
+    };
+    if let Some(hooks) = object.get_mut("hooks") {
+        prune_empty_hook_containers(hooks);
+    }
+    if object
+        .get("hooks")
+        .is_some_and(|value| matches!(value, Value::Object(map) if map.is_empty()))
+    {
+        object.remove("hooks");
+    }
+}
+
+fn prune_empty_hook_containers(root: &mut Value) {
+    match root {
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                prune_empty_hook_containers(value);
+            }
+            object.retain(|_, value| !value_is_empty_container(value));
+        }
+        Value::Array(items) => {
+            for value in items.iter_mut() {
+                prune_empty_hook_containers(value);
+            }
+            items.retain(|value| !value_is_empty_container(value));
+        }
+        _ => {}
+    }
+}
+
+fn value_is_empty_container(value: &Value) -> bool {
+    matches!(value, Value::Array(items) if items.is_empty())
+        || matches!(value, Value::Object(object) if object.is_empty())
+}
+
 fn is_promptbox_codex_command_hook(value: &Value) -> bool {
     value
         .as_object()
@@ -307,11 +398,10 @@ fn empty_hook_entry(value: &Value) -> bool {
         return false;
     };
 
-    object.len() == 1
-        && object
-            .get("hooks")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty)
+    object
+        .get("hooks")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
 }
 
 fn command_matches_promptbox_codex(command: &str) -> bool {
@@ -325,7 +415,10 @@ fn command_matches_expected_promptbox_codex(command: &str, expected_command: &st
 
 fn codex_status_message(hook_installed: bool, codex_hooks_enabled: bool) -> String {
     match (hook_installed, codex_hooks_enabled) {
-        (true, true) => "Codex CLI 用户级 hook 已安装，codex_hooks 已开启".to_string(),
+        (true, true) => {
+            "Codex CLI 用户级 hook 已安装，codex_hooks 已开启；已运行的 Codex CLI 需要新开窗口后生效"
+                .to_string()
+        }
         (true, false) => "Codex CLI hook 已安装，但 codex_hooks 尚未开启".to_string(),
         (false, true) => "codex_hooks 已开启，但 Codex CLI hook 未安装".to_string(),
         (false, false) => "Codex CLI hook 未安装，codex_hooks 尚未开启".to_string(),
@@ -387,6 +480,10 @@ mod tests {
         assert!(installed.hooks_backup_path.is_some());
         assert!(installed.config_backup_path.is_some());
         assert!(hooks.contains("echo existing"));
+        if cfg!(windows) {
+            assert!(hooks.contains("cmd /d /s /c"));
+            assert!(hooks.contains("exit /b 0"));
+        }
         assert!(hooks.contains("promptbox-hook.exe"));
         assert!(hooks.contains("--provider codex"));
         assert!(config.contains("model = \"gpt-test\""));

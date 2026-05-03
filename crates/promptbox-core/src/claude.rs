@@ -80,6 +80,44 @@ pub fn install_claude_user_hook(hook_path: &Path) -> Result<ClaudeHookStatus, St
     })
 }
 
+pub fn uninstall_claude_user_hook(hook_path: &Path) -> Result<ClaudeHookStatus, String> {
+    let settings_path = claude_user_settings_path()?;
+    let expected_command = claude_hook_command(hook_path);
+
+    if !settings_path.exists() {
+        return Ok(ClaudeHookStatus {
+            settings_path: path_to_string(&settings_path),
+            expected_command,
+            installed: false,
+            readable: true,
+            message: "Claude Code 用户级 settings.json 尚未创建，无需取消 hook".to_string(),
+            backup_path: None,
+        });
+    }
+
+    let mut root = read_settings_json(&settings_path)?;
+    let had_promptbox_hook = has_promptbox_claude_hook(&root, &expected_command)
+        || has_stale_promptbox_claude_hook(&root, &expected_command);
+    let backup_path = Some(backup_settings_file(&settings_path)?);
+
+    remove_promptbox_claude_hooks(&mut root);
+    prune_empty_hooks_root(&mut root);
+    write_settings_json(&settings_path, &root)?;
+
+    Ok(ClaudeHookStatus {
+        settings_path: path_to_string(&settings_path),
+        expected_command,
+        installed: false,
+        readable: true,
+        message: if had_promptbox_hook {
+            "Claude Code 用户级 PromptHarbor hook 已取消，其他 hook 已保留".to_string()
+        } else {
+            "未发现 Claude Code 用户级 PromptHarbor hook，配置未破坏".to_string()
+        },
+        backup_path: backup_path.as_ref().map(|path| path_to_string(path)),
+    })
+}
+
 fn claude_user_settings_path() -> Result<PathBuf, String> {
     let home = env::var("USERPROFILE")
         .or_else(|_| env::var("HOME"))
@@ -88,7 +126,18 @@ fn claude_user_settings_path() -> Result<PathBuf, String> {
 }
 
 fn claude_hook_command(hook_path: &Path) -> String {
-    format!("\"{}\" --provider claude", hook_path.to_string_lossy())
+    hook_command(hook_path, "claude")
+}
+
+fn hook_command(hook_path: &Path, provider: &str) -> String {
+    if cfg!(windows) {
+        format!(
+            "cmd /d /s /c \"\"{}\" --provider {provider} || exit /b 0\"",
+            hook_path.to_string_lossy()
+        )
+    } else {
+        format!("\"{}\" --provider {provider}", hook_path.to_string_lossy())
+    }
 }
 
 fn read_settings_json(path: &Path) -> Result<Value, String> {
@@ -218,6 +267,44 @@ fn remove_promptbox_claude_hooks(root: &mut Value) {
     }
 }
 
+fn prune_empty_hooks_root(root: &mut Value) {
+    let Some(object) = root.as_object_mut() else {
+        return;
+    };
+    if let Some(hooks) = object.get_mut("hooks") {
+        prune_empty_hook_containers(hooks);
+    }
+    if object
+        .get("hooks")
+        .is_some_and(|value| matches!(value, Value::Object(map) if map.is_empty()))
+    {
+        object.remove("hooks");
+    }
+}
+
+fn prune_empty_hook_containers(root: &mut Value) {
+    match root {
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                prune_empty_hook_containers(value);
+            }
+            object.retain(|_, value| !value_is_empty_container(value));
+        }
+        Value::Array(items) => {
+            for value in items.iter_mut() {
+                prune_empty_hook_containers(value);
+            }
+            items.retain(|value| !value_is_empty_container(value));
+        }
+        _ => {}
+    }
+}
+
+fn value_is_empty_container(value: &Value) -> bool {
+    matches!(value, Value::Array(items) if items.is_empty())
+        || matches!(value, Value::Object(object) if object.is_empty())
+}
+
 fn is_promptbox_claude_command_hook(value: &Value) -> bool {
     value
         .as_object()
@@ -231,11 +318,10 @@ fn empty_hook_entry(value: &Value) -> bool {
         return false;
     };
 
-    object.len() == 1
-        && object
-            .get("hooks")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty)
+    object
+        .get("hooks")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
 }
 
 fn command_matches_promptbox_claude(command: &str) -> bool {
@@ -296,6 +382,10 @@ mod tests {
         assert!(installed.backup_path.is_some());
         assert!(PathBuf::from(installed.backup_path.unwrap()).exists());
         assert!(updated.contains("echo existing"));
+        if cfg!(windows) {
+            assert!(updated.contains("cmd /d /s /c"));
+            assert!(updated.contains("exit /b 0"));
+        }
         assert!(updated.contains("promptbox-hook.exe"));
         assert!(updated.contains("--provider claude"));
     }

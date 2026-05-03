@@ -10,7 +10,7 @@ use std::{
 };
 
 pub const HOOK_EVENTS_PATH: &str = "/api/hook-events";
-pub const MAX_HOOK_BODY_BYTES: usize = 512 * 1024;
+pub const MAX_HOOK_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

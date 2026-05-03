@@ -7,10 +7,18 @@ use std::{
     env,
     io::{self, Read, Write},
     net::TcpStream,
+    panic,
     time::Duration,
 };
 
 fn main() {
+    panic::set_hook(Box::new(|_| {
+        eprintln!("promptbox-hook 内部异常，已按 fail-open 退出");
+    }));
+    let _ = panic::catch_unwind(run);
+}
+
+fn run() {
     let args = env::args().collect::<Vec<_>>();
 
     if args.iter().any(|arg| arg == "--version" || arg == "-V") {

@@ -368,7 +368,42 @@ pub fn load_config_for_hook() -> Result<PromptBoxConfig, String> {
 }
 
 fn ensure_hook_binary(paths: &PromptBoxPaths) -> Result<HookBinaryStatus, String> {
+    let source = find_hook_source();
     let mut existing_failure = None;
+    let mut source_failure = None;
+
+    if let Some(source) = source
+        .as_ref()
+        .filter(|source| source.as_path() != paths.hook_binary_path.as_path())
+    {
+        match hook_version_output(source) {
+            Ok(version_output) if hook_version_is_compatible(&version_output) => {
+                if hook_source_differs(source, &paths.hook_binary_path)? {
+                    if let Err(error) = copy_hook_source(source, &paths.hook_binary_path) {
+                        if let Ok(target_version_output) =
+                            hook_version_output(&paths.hook_binary_path)
+                        {
+                            if hook_version_is_compatible(&target_version_output) {
+                                return Ok(HookBinaryStatus::ready(
+                                    paths.hook_binary_path.clone(),
+                                    target_version_output,
+                                ));
+                            }
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(version_output) => {
+                source_failure = Some(format!(
+                    "当前运行目录中的 hook 可执行文件版本或协议版本不匹配：{version_output}"
+                ));
+            }
+            Err(error) => {
+                source_failure = Some(error);
+            }
+        }
+    }
 
     if paths.hook_binary_path.exists() {
         match hook_version_output(&paths.hook_binary_path) {
@@ -389,7 +424,7 @@ fn ensure_hook_binary(paths: &PromptBoxPaths) -> Result<HookBinaryStatus, String
         }
     }
 
-    let source = find_hook_source().ok_or_else(|| {
+    let source = source.ok_or_else(|| {
         let prefix = existing_failure
             .as_ref()
             .map(|failure| format!("{failure}；"))
@@ -401,15 +436,15 @@ fn ensure_hook_binary(paths: &PromptBoxPaths) -> Result<HookBinaryStatus, String
         )
     })?;
 
-    if source != paths.hook_binary_path {
-        fs::copy(&source, &paths.hook_binary_path).map_err(|error| {
-            format!(
-                "更新 hook 可执行文件失败：{} -> {}：{error}",
-                source.display(),
-                paths.hook_binary_path.display()
-            )
-        })?;
+    if let Some(source_failure) = source_failure {
+        return Err(format!(
+            "{}；{}",
+            existing_failure.unwrap_or_else(|| "稳定位置 hook 可执行文件不可用".to_string()),
+            source_failure
+        ));
     }
+
+    copy_hook_source(&source, &paths.hook_binary_path)?;
 
     let version_output = hook_version_output(&paths.hook_binary_path)?;
     if !hook_version_is_compatible(&version_output) {
@@ -438,6 +473,46 @@ fn find_hook_source() -> Option<PathBuf> {
     let current_exe = env::current_exe().ok()?;
     let sibling = current_exe.with_file_name(hook_exe_name());
     sibling.is_file().then_some(sibling)
+}
+
+fn hook_source_differs(source: &Path, target: &Path) -> Result<bool, String> {
+    if !target.exists() {
+        return Ok(true);
+    }
+
+    let source_meta = fs::metadata(source)
+        .map_err(|error| format!("读取 hook 源文件元信息失败：{}：{error}", source.display()))?;
+    let target_meta = fs::metadata(target).map_err(|error| {
+        format!(
+            "读取 hook 目标文件元信息失败：{}：{error}",
+            target.display()
+        )
+    })?;
+    if source_meta.len() != target_meta.len() {
+        return Ok(true);
+    }
+
+    let source_bytes = fs::read(source)
+        .map_err(|error| format!("读取 hook 源文件失败：{}：{error}", source.display()))?;
+    let target_bytes = fs::read(target)
+        .map_err(|error| format!("读取 hook 目标文件失败：{}：{error}", target.display()))?;
+
+    Ok(source_bytes != target_bytes)
+}
+
+fn copy_hook_source(source: &Path, target: &Path) -> Result<(), String> {
+    if source == target {
+        return Ok(());
+    }
+
+    fs::copy(source, target).map_err(|error| {
+        format!(
+            "更新 hook 可执行文件失败：{} -> {}：{error}",
+            source.display(),
+            target.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn hook_version_output(path: &Path) -> Result<String, String> {

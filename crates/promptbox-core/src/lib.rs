@@ -4,8 +4,12 @@ mod event;
 mod runtime;
 mod store;
 
-pub use claude::{detect_claude_user_hook, install_claude_user_hook, ClaudeHookStatus};
-pub use codex::{detect_codex_user_hook, install_codex_user_hook, CodexHookStatus};
+pub use claude::{
+    detect_claude_user_hook, install_claude_user_hook, uninstall_claude_user_hook, ClaudeHookStatus,
+};
+pub use codex::{
+    detect_codex_user_hook, install_codex_user_hook, uninstall_codex_user_hook, CodexHookStatus,
+};
 pub use event::{
     append_spool_event, clear_spool_events, current_captured_at, endpoint_host_port,
     import_spool_events, normalize_hook_input, parse_local_endpoint, read_spool_events,
@@ -17,8 +21,10 @@ pub use runtime::{
     DEFAULT_LOCAL_ENDPOINT, HOOK_PROTOCOL_VERSION,
 };
 pub use store::{
-    ArchiveSessionOutcome, DraftState, PromptHistory, PromptHistoryItem, PromptSearchResultItem,
-    PromptSearchResults, PromptStore, RecordOutcome, SessionList, SessionListItem, StoreSummary,
+    ArchiveSessionOutcome, DeleteSessionOutcome, DraftList, DraftListItem, DraftState,
+    PromptAttachment, PromptAttachmentDataUrl, PromptHistory, PromptHistoryItem,
+    PromptSearchResultItem, PromptSearchResults, PromptStore, RecordOutcome, SessionList,
+    SessionListItem, StoreSummary,
 };
 
 pub fn initialize_runtime() -> Result<RuntimeState, String> {
