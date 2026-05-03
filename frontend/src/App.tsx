@@ -22,6 +22,10 @@ type AppStatus = {
   configReady: boolean;
   hookBinaryReady: boolean;
   hookBinaryMessage: string;
+  databaseReady: boolean;
+  databaseMessage: string;
+  sessionCount: number;
+  promptEventCount: number;
   collectorReady: boolean;
   collectorMessage: string;
   importedSpoolEvents: number;
@@ -29,11 +33,14 @@ type AppStatus = {
   startupErrors: string[];
 };
 
-const emptySessions = [
-  { label: '活动', count: 0, detail: '真实提交 prompt 后出现' },
-  { label: '可能已关闭', count: 0, detail: '超过阈值未收到 hook' },
-  { label: '历史', count: 0, detail: '只回看和复制' },
-];
+type ClaudeHookStatus = {
+  settingsPath: string;
+  expectedCommand: string;
+  installed: boolean;
+  readable: boolean;
+  message: string;
+  backupPath: string | null;
+};
 
 const menuItems = [
   { label: '会话', active: true },
@@ -44,7 +51,9 @@ const menuItems = [
 
 export function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
+  const [claudeStatus, setClaudeStatus] = useState<ClaudeHookStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [installingClaude, setInstallingClaude] = useState(false);
 
   useEffect(() => {
     let disposed = false;
@@ -64,12 +73,39 @@ export function App() {
     };
 
     loadStatus();
+    invoke<ClaudeHookStatus>('claude_hook_status')
+      .then((nextStatus) => {
+        if (!disposed) {
+          setClaudeStatus(nextStatus);
+        }
+      })
+      .catch((reason) => {
+        if (!disposed) {
+          setError(String(reason));
+        }
+      });
     const timer = window.setInterval(loadStatus, 1000);
     return () => {
       disposed = true;
       window.clearInterval(timer);
     };
   }, []);
+
+  const installClaudeHook = () => {
+    setInstallingClaude(true);
+    invoke<ClaudeHookStatus>('install_claude_hook')
+      .then((nextStatus) => {
+        setClaudeStatus(nextStatus);
+        setError(null);
+      })
+      .catch((reason) => setError(String(reason)))
+      .finally(() => setInstallingClaude(false));
+  };
+  const sessionGroups = [
+    { label: '活动', count: status?.sessionCount ?? 0, detail: '真实提交 prompt 后出现' },
+    { label: '可能已关闭', count: 0, detail: '超过阈值未收到 hook' },
+    { label: '历史', count: 0, detail: '只回看和复制' },
+  ];
 
   return (
     <main className="app-shell" aria-label="PromptHarbor 工作区">
@@ -91,10 +127,10 @@ export function App() {
         <section className="session-list" aria-label="Agent 会话列表">
           <div className="rail-heading">
             <span>Agent 会话</span>
-            <strong>0</strong>
+            <strong>{status?.sessionCount ?? 0}</strong>
           </div>
           <div className="session-groups">
-            {emptySessions.map((item) => (
+            {sessionGroups.map((item) => (
               <button className="session-group" key={item.label}>
                 <span>
                   <strong>{item.label}</strong>
@@ -116,7 +152,9 @@ export function App() {
           <div className="status-strip" aria-label="应用状态">
             <span>{status?.version ? `v${status.version}` : '版本读取中'}</span>
             <span>{status?.localEndpoint ?? '采集端点待连接'}</span>
-            <span>{status ? (status.collectorReady ? '采集就绪' : '采集不可用') : '采集状态读取中'}</span>
+            <span>
+              {status ? (status.collectorReady ? '采集就绪' : '采集不可用') : '采集状态读取中'}
+            </span>
             <span>{status?.hookBinaryReady ? 'hook 就绪' : 'hook 待处理'}</span>
           </div>
         </header>
@@ -146,10 +184,24 @@ export function App() {
               </dd>
             </div>
             <div>
+              <dt>数据库</dt>
+              <dd className={status?.databaseReady ? 'ok-text' : 'warning-text'}>
+                {status?.databaseMessage ?? '等待初始化'}
+              </dd>
+            </div>
+            <div>
               <dt>采集端点</dt>
               <dd className={status?.collectorReady ? 'ok-text' : 'warning-text'}>
                 {status?.collectorMessage ?? '等待启动'}
               </dd>
+            </div>
+            <div>
+              <dt>Agent 会话</dt>
+              <dd>{status ? `${status.sessionCount} 个` : '0 个'}</dd>
+            </div>
+            <div>
+              <dt>正式 prompt</dt>
+              <dd>{status ? `${status.promptEventCount} 条` : '0 条'}</dd>
             </div>
             <div>
               <dt>已采集事件</dt>
@@ -167,6 +219,45 @@ export function App() {
               ))}
             </div>
           ) : null}
+        </section>
+
+        <section className="wizard-panel" aria-label="Claude Code 配置向导">
+          <div className="section-heading">
+            <h3>Claude Code</h3>
+            <span className={claudeStatus?.installed ? 'ok-text' : 'warning-text'}>
+              {claudeStatus?.installed ? 'hook 已安装' : 'hook 未安装'}
+            </span>
+          </div>
+          <dl className="runtime-list">
+            <div>
+              <dt>配置文件</dt>
+              <dd>{claudeStatus?.settingsPath ?? '读取中'}</dd>
+            </div>
+            <div>
+              <dt>hook 命令</dt>
+              <dd>{claudeStatus?.expectedCommand ?? '读取中'}</dd>
+            </div>
+            <div>
+              <dt>检测结果</dt>
+              <dd>{claudeStatus?.message ?? '等待检测'}</dd>
+            </div>
+            {claudeStatus?.backupPath ? (
+              <div>
+                <dt>备份文件</dt>
+                <dd>{claudeStatus.backupPath}</dd>
+              </div>
+            ) : null}
+          </dl>
+          <div className="wizard-actions">
+            <button
+              className="primary-action"
+              disabled={installingClaude || claudeStatus?.installed}
+              onClick={installClaudeHook}
+              type="button"
+            >
+              {installingClaude ? '安装中' : '安装用户级 hook'}
+            </button>
+          </div>
         </section>
 
         <section className="prompt-history" aria-label="prompt 历史">

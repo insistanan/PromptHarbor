@@ -1,6 +1,6 @@
 use promptbox_core::{
-    import_spool_events, parse_local_endpoint, AppStatus, PromptEvent, RuntimeState,
-    HOOK_EVENTS_PATH, MAX_HOOK_BODY_BYTES,
+    clear_spool_events, parse_local_endpoint, read_spool_events, AppStatus, ClaudeHookStatus,
+    PromptEvent, PromptStore, RuntimeState, HOOK_EVENTS_PATH, MAX_HOOK_BODY_BYTES,
 };
 use std::{
     io::{Read, Write},
@@ -15,6 +15,7 @@ use tauri_plugin_positioner::{Position, WindowExt};
 struct StartupState {
     status: Mutex<AppStatus>,
     prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
+    store: Option<PromptStore>,
 }
 
 #[tauri::command]
@@ -28,8 +29,28 @@ fn app_status(state: tauri::State<'_, StartupState>) -> AppStatus {
     if let Ok(events) = state.prompt_events.lock() {
         status.received_prompt_events = events.len();
     }
+    if let Some(store) = &state.store {
+        if let Ok(summary) = store.summary() {
+            status.database_ready = true;
+            status.database_message = "数据库就绪".to_string();
+            status.session_count = summary.session_count;
+            status.prompt_event_count = summary.prompt_event_count;
+        }
+    }
 
     status
+}
+
+#[tauri::command]
+fn claude_hook_status() -> Result<ClaudeHookStatus, String> {
+    let paths = promptbox_core::resolve_promptbox_paths()?;
+    promptbox_core::detect_claude_user_hook(&paths.hook_binary_path)
+}
+
+#[tauri::command]
+fn install_claude_hook() -> Result<ClaudeHookStatus, String> {
+    let paths = promptbox_core::resolve_promptbox_paths()?;
+    promptbox_core::install_claude_user_hook(&paths.hook_binary_path)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -50,36 +71,87 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![app_status])
+        .invoke_handler(tauri::generate_handler![
+            app_status,
+            claude_hook_status,
+            install_claude_hook
+        ])
         .run(tauri::generate_context!())
         .expect("error while running PromptHarbor");
 }
 
 fn initialize_startup_state() -> StartupState {
     let prompt_events = Arc::new(Mutex::new(Vec::new()));
-    let status = match promptbox_core::initialize_runtime() {
+    let (status, store) = match promptbox_core::initialize_runtime() {
         Ok(runtime) => initialize_runtime_dependent_state(&runtime, Arc::clone(&prompt_events)),
-        Err(error) => promptbox_core::app_status_from_error(error),
+        Err(error) => (promptbox_core::app_status_from_error(error), None),
     };
 
     StartupState {
         status: Mutex::new(status),
         prompt_events,
+        store,
     }
 }
 
 fn initialize_runtime_dependent_state(
     runtime: &RuntimeState,
     prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
-) -> AppStatus {
+) -> (AppStatus, Option<PromptStore>) {
     let mut status = runtime.app_status();
+    let store = PromptStore::new(runtime.paths.database_path.clone());
 
-    match import_spool_events(&runtime.paths.spool_path) {
+    match store.initialize() {
+        Ok(summary) => {
+            status.database_ready = true;
+            status.database_message = "数据库就绪".to_string();
+            status.session_count = summary.session_count;
+            status.prompt_event_count = summary.prompt_event_count;
+        }
+        Err(error) => {
+            status.database_ready = false;
+            status.database_message = error.clone();
+            status.startup_errors.push(error);
+        }
+    }
+
+    match read_spool_events(&runtime.paths.spool_path) {
         Ok(imported) => {
-            status.imported_spool_events = imported.len();
-            if let Ok(mut events) = prompt_events.lock() {
-                events.extend(imported);
-                status.received_prompt_events = events.len();
+            let mut imported_count = 0;
+            let mut import_failed = false;
+            match prompt_events.lock() {
+                Ok(mut events) => {
+                    for event in imported {
+                        match store.record_prompt_event(&event) {
+                            Ok(outcome) => {
+                                status.session_count = outcome.session_count;
+                                status.prompt_event_count = outcome.prompt_event_count;
+                                if outcome.inserted {
+                                    imported_count += 1;
+                                }
+                                events.push(event);
+                            }
+                            Err(error) => {
+                                status.startup_errors.push(error);
+                                import_failed = true;
+                                break;
+                            }
+                        }
+                    }
+                    status.received_prompt_events = events.len();
+                }
+                Err(_) => {
+                    status
+                        .startup_errors
+                        .push("采集缓冲区不可用，spool 暂未清理".to_string());
+                    import_failed = true;
+                }
+            }
+            status.imported_spool_events = imported_count;
+            if !import_failed {
+                if let Err(error) = clear_spool_events(&runtime.paths.spool_path) {
+                    status.startup_errors.push(error);
+                }
             }
         }
         Err(error) => {
@@ -90,6 +162,7 @@ fn initialize_runtime_dependent_state(
     match start_local_collector(
         &runtime.config.local_endpoint,
         &runtime.config.token,
+        store.clone(),
         Arc::clone(&prompt_events),
     ) {
         Ok(message) => {
@@ -103,12 +176,13 @@ fn initialize_runtime_dependent_state(
         }
     }
 
-    status
+    (status, Some(store))
 }
 
 fn start_local_collector(
     endpoint: &str,
     token: &str,
+    store: PromptStore,
     prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
 ) -> Result<String, String> {
     let addr = parse_local_endpoint(endpoint)?;
@@ -125,10 +199,11 @@ fn start_local_collector(
                 continue;
             };
             let token = token.clone();
+            let store = store.clone();
             let prompt_events = Arc::clone(&prompt_events);
 
             thread::spawn(move || {
-                handle_collector_connection(stream, &token, prompt_events);
+                handle_collector_connection(stream, &token, &store, prompt_events);
             });
         }
     });
@@ -139,10 +214,11 @@ fn start_local_collector(
 fn handle_collector_connection(
     mut stream: TcpStream,
     token: &str,
+    store: &PromptStore,
     prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
 ) {
     let response = match read_http_request(&mut stream) {
-        Ok(request) => process_hook_request(request, token, prompt_events),
+        Ok(request) => process_hook_request(request, token, store, prompt_events),
         Err(error) => HttpResponse::new(400, "Bad Request", error),
     };
 
@@ -152,6 +228,7 @@ fn handle_collector_connection(
 fn process_hook_request(
     request: HttpRequest,
     token: &str,
+    store: &PromptStore,
     prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
 ) -> HttpResponse {
     if request.method != "POST" || request.path != HOOK_EVENTS_PATH {
@@ -169,6 +246,14 @@ fn process_hook_request(
             return HttpResponse::new(400, "Bad Request", format!("解析 hook 事件失败：{error}"));
         }
     };
+
+    if let Err(error) = store.record_prompt_event(&event) {
+        return HttpResponse::new(
+            500,
+            "Internal Server Error",
+            format!("写入正式历史失败：{error}"),
+        );
+    }
 
     match prompt_events.lock() {
         Ok(mut events) => events.push(event),

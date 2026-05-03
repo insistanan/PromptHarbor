@@ -114,6 +114,12 @@ pub fn append_spool_event(path: &Path, event: &PromptEvent) -> Result<(), String
 }
 
 pub fn import_spool_events(path: &Path) -> Result<Vec<PromptEvent>, String> {
+    let events = read_spool_events(path)?;
+    clear_spool_events(path)?;
+    Ok(events)
+}
+
+pub fn read_spool_events(path: &Path) -> Result<Vec<PromptEvent>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -137,10 +143,15 @@ pub fn import_spool_events(path: &Path) -> Result<Vec<PromptEvent>, String> {
         events.push(event);
     }
 
-    fs::write(path, "")
-        .map_err(|error| format!("清理 spool 文件失败：{}：{error}", path.display()))?;
-
     Ok(events)
+}
+
+pub fn clear_spool_events(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    fs::write(path, "").map_err(|error| format!("清理 spool 文件失败：{}：{error}", path.display()))
 }
 
 pub fn parse_local_endpoint(endpoint: &str) -> Result<SocketAddr, String> {
