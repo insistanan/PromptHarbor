@@ -26,6 +26,24 @@
 - `crates/promptbox-app`：Tauri 应用骨架，提供最小 `app_status` IPC command。
 - `frontend`：React + Vite 前端骨架。
 
+PromptBox home 默认路径：
+
+```text
+%APPDATA%\PromptBox
+```
+
+可以通过 `PROMPTBOX_HOME` 覆盖。主程序启动时会创建 `config.toml`、spool/log/bin 目录，并检查：
+
+```text
+<PromptBox home>\bin\promptbox-hook.exe
+```
+
+开发模式下如需让 hook 状态显示为就绪，需要先构建 hook 可执行文件，或用 `PROMPTBOX_HOOK_SOURCE` 指向一个已构建的 `promptbox-hook.exe`。hook 可执行文件必须支持：
+
+```powershell
+promptbox-hook.exe --version
+```
+
 安装前端依赖：
 
 ```powershell

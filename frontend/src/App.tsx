@@ -8,6 +8,21 @@ type AppStatus = {
   hookProtocolVersion: string;
   localEndpoint: string;
   dataPolicy: string;
+  promptboxHome: string | null;
+  configPath: string | null;
+  databasePath: string | null;
+  spoolPath: string | null;
+  logsDir: string | null;
+  hookBinaryPath: string | null;
+  recordingPaused: boolean;
+  maybeClosedAfterHours: number;
+  retainRawHookEvents: boolean;
+  rawHookEventsRetentionDays: number;
+  autostart: boolean;
+  configReady: boolean;
+  hookBinaryReady: boolean;
+  hookBinaryMessage: string;
+  startupErrors: string[];
 };
 
 const emptySessions = [
@@ -78,8 +93,43 @@ export function App() {
           <div className="status-strip" aria-label="应用状态">
             <span>{status?.version ? `v${status.version}` : '版本读取中'}</span>
             <span>{status?.localEndpoint ?? '采集端点待连接'}</span>
+            <span>{status?.hookBinaryReady ? 'hook 就绪' : 'hook 待处理'}</span>
           </div>
         </header>
+
+        <section className="runtime-panel" aria-label="本地运行时状态">
+          <div className="section-heading">
+            <h3>本地运行时</h3>
+            <span>{status?.configReady ? '配置就绪' : '配置异常'}</span>
+          </div>
+          <dl className="runtime-list">
+            <div>
+              <dt>PromptBox home</dt>
+              <dd>{status?.promptboxHome ?? '未初始化'}</dd>
+            </div>
+            <div>
+              <dt>用户配置</dt>
+              <dd>{status?.configPath ?? '未初始化'}</dd>
+            </div>
+            <div>
+              <dt>hook 可执行文件</dt>
+              <dd>{status?.hookBinaryPath ?? '未初始化'}</dd>
+            </div>
+            <div>
+              <dt>hook 状态</dt>
+              <dd className={status?.hookBinaryReady ? 'ok-text' : 'warning-text'}>
+                {status?.hookBinaryMessage ?? '等待检测'}
+              </dd>
+            </div>
+          </dl>
+          {status?.startupErrors.length ? (
+            <div className="runtime-errors">
+              {status.startupErrors.map((item) => (
+                <p key={item}>{item}</p>
+              ))}
+            </div>
+          ) : null}
+        </section>
 
         <section className="prompt-history" aria-label="prompt 历史">
           <div className="section-heading">

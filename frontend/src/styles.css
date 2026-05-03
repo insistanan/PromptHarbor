@@ -192,12 +192,13 @@ h3 {
   min-width: 0;
   min-height: 100vh;
   display: grid;
-  grid-template-rows: auto minmax(120px, 0.7fr) minmax(220px, 1fr);
+  grid-template-rows: auto auto minmax(105px, 0.6fr) minmax(190px, 1fr);
   gap: 14px;
   padding: 18px;
 }
 
 .detail-header,
+.runtime-panel,
 .prompt-history,
 .draft-panel {
   min-width: 0;
@@ -215,6 +216,7 @@ h3 {
 }
 
 .prompt-history,
+.runtime-panel,
 .draft-panel {
   display: flex;
   flex-direction: column;
@@ -241,6 +243,55 @@ h3 {
 
 .error-text {
   color: #a23b3b;
+}
+
+.ok-text {
+  color: #2f6f53;
+}
+
+.warning-text {
+  color: #9a5b18;
+}
+
+.runtime-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+}
+
+.runtime-list div {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.runtime-list dt {
+  color: #6b7886;
+  font-size: 12px;
+}
+
+.runtime-list dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #263442;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-errors {
+  border-top: 1px solid #ead8bd;
+  background: #fff7eb;
+  padding: 8px 14px;
+}
+
+.runtime-errors p {
+  margin: 0;
+  color: #8a4b13;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .draft-input {
