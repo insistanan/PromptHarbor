@@ -1,5 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { Editor, defaultValueCtx, rootCtx } from '@milkdown/kit/core';
+import { listener, listenerCtx } from '@milkdown/kit/plugin/listener';
+import { history } from '@milkdown/kit/plugin/history';
+import { commonmark } from '@milkdown/kit/preset/commonmark';
+import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react';
 
 type AppStatus = {
   appName: string;
@@ -81,6 +86,18 @@ type ArchiveSessionOutcome = {
   message: string;
 };
 
+type DraftState = {
+  provider: string;
+  sessionId: string;
+  contentMd: string;
+  contentHash: string;
+  copyState: string;
+  copiedAt: string | null;
+  lastCopiedHash: string | null;
+  updatedAt: string;
+  isEmpty: boolean;
+};
+
 const menuItems = [
   { label: '会话', active: true },
   { label: '草稿', active: false },
@@ -101,6 +118,14 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [installingClaude, setInstallingClaude] = useState(false);
   const [installingCodex, setInstallingCodex] = useState(false);
+  const [draft, setDraft] = useState<DraftState | null>(null);
+  const [draftContent, setDraftContent] = useState('');
+  const [draftSessionKey, setDraftSessionKey] = useState<string | null>(null);
+  const [lastSavedDraftContent, setLastSavedDraftContent] = useState('');
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [draftSaving, setDraftSaving] = useState(false);
+  const [draftMessage, setDraftMessage] = useState<string | null>(null);
+  const [editorVersion, setEditorVersion] = useState(0);
 
   useEffect(() => {
     let disposed = false;
@@ -199,6 +224,130 @@ export function App() {
       })
       .catch((reason) => setError(String(reason)))
       .finally(() => setInstallingCodex(false));
+  };
+  const selectedSessionKey = selectedSession
+    ? sessionKey(selectedSession.provider, selectedSession.sessionId)
+    : null;
+  const selectedSessionIsActive = selectedSession?.status === 'active';
+  const draftHasUnsavedChanges = draftContent !== lastSavedDraftContent;
+
+  useEffect(() => {
+    let disposed = false;
+
+    if (!selectedSession || !selectedSessionIsActive || !selectedSessionKey) {
+      setDraft(null);
+      setDraftContent('');
+      setDraftSessionKey(null);
+      setLastSavedDraftContent('');
+      setDraftLoading(false);
+      setDraftSaving(false);
+      setDraftMessage(null);
+      setEditorVersion((version) => version + 1);
+      return () => {
+        disposed = true;
+      };
+    }
+
+    setDraftLoading(true);
+    invoke<DraftState>('get_draft', {
+      provider: selectedSession.provider,
+      sessionId: selectedSession.sessionId,
+    })
+      .then((nextDraft) => {
+        if (disposed) {
+          return;
+        }
+        setDraft(nextDraft);
+        setDraftContent(nextDraft.contentMd);
+        setLastSavedDraftContent(nextDraft.contentMd);
+        setDraftSessionKey(selectedSessionKey);
+        setDraftMessage(null);
+        setEditorVersion((version) => version + 1);
+      })
+      .catch((reason) => {
+        if (!disposed) {
+          setError(String(reason));
+        }
+      })
+      .finally(() => {
+        if (!disposed) {
+          setDraftLoading(false);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [
+    selectedSession?.provider,
+    selectedSession?.sessionId,
+    selectedSession?.status,
+    selectedSession?.promptCount,
+    selectedSessionIsActive,
+    selectedSessionKey,
+  ]);
+
+  useEffect(() => {
+    if (
+      !selectedSession ||
+      !selectedSessionIsActive ||
+      !selectedSessionKey ||
+      draftSessionKey !== selectedSessionKey ||
+      draftContent === lastSavedDraftContent
+    ) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setDraftSaving(true);
+      invoke<DraftState>('save_draft', {
+        provider: selectedSession.provider,
+        sessionId: selectedSession.sessionId,
+        contentMd: draftContent,
+      })
+        .then((nextDraft) => {
+          setDraft(nextDraft);
+          setLastSavedDraftContent(nextDraft.contentMd);
+          setDraftMessage(nextDraft.isEmpty ? null : '草稿已保存');
+          setError(null);
+        })
+        .catch((reason) => setError(String(reason)))
+        .finally(() => setDraftSaving(false));
+    }, 500);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    draftContent,
+    draftSessionKey,
+    lastSavedDraftContent,
+    selectedSession,
+    selectedSessionIsActive,
+    selectedSessionKey,
+  ]);
+
+  const copyCurrentDraft = () => {
+    if (!selectedSession || !selectedSessionIsActive || !draftContent.trim()) {
+      return;
+    }
+
+    navigator.clipboard
+      .writeText(draftContent)
+      .then(() =>
+        invoke<DraftState>('mark_draft_copied', {
+          provider: selectedSession.provider,
+          sessionId: selectedSession.sessionId,
+          contentMd: draftContent,
+        }),
+      )
+      .then((nextDraft) => {
+        setDraft(nextDraft);
+        setLastSavedDraftContent(nextDraft.contentMd);
+        setDraftMessage('Markdown 已复制，等待 Agent hook 匹配真实提交');
+        setError(null);
+      })
+      .catch((reason) => {
+        setError(String(reason));
+      });
   };
   const archiveSelectedSession = () => {
     if (!selectedSession || selectedSession.status === 'archived') {
@@ -516,18 +665,92 @@ export function App() {
         <section className="draft-panel" aria-label="当前草稿">
           <div className="section-heading">
             <h3>当前草稿</h3>
-            <span>Milkdown 待接入</span>
+            <span>
+              {draftStatusLabel(draft, draftSaving, draftLoading, draftHasUnsavedChanges)}
+            </span>
           </div>
-          <div className="draft-surface">
-            <p>当前骨架已经打通 React 到 Tauri 的最小 IPC。下一步会接入本地配置、hook 采集端点和真实会话数据。</p>
-            <div className="draft-input" aria-label="草稿输入占位">
-              选择活动会话后，在这里编写下一轮 Markdown prompt。
+          {selectedSession && selectedSessionIsActive ? (
+            <div className="draft-workspace">
+              <MilkdownProvider>
+                <MilkdownDraftEditor
+                  disabled={draftLoading}
+                  initialValue={draftContent}
+                  key={`${draftSessionKey ?? 'none'}:${editorVersion}`}
+                  onChange={setDraftContent}
+                />
+              </MilkdownProvider>
+              <div className="draft-source-panel">
+                <div className="draft-toolbar">
+                  <span>Markdown 源文本</span>
+                  <button
+                    className="primary-action"
+                    disabled={
+                      draftLoading ||
+                      draftSaving ||
+                      draftHasUnsavedChanges ||
+                      !draftContent.trim()
+                    }
+                    onClick={copyCurrentDraft}
+                    type="button"
+                  >
+                    复制
+                  </button>
+                </div>
+                <textarea
+                  aria-label="Markdown 源文本只读查看"
+                  readOnly
+                  value={draftContent}
+                />
+                <div className="draft-meta">
+                  <span>hash {draft?.contentHash.slice(0, 12) ?? '未生成'}</span>
+                  <span>{draft?.copiedAt ? `复制于 ${formatDateTime(draft.copiedAt)}` : '未复制'}</span>
+                </div>
+              </div>
+              {draftMessage ? <p className="draft-message">{draftMessage}</p> : null}
+              {error ? <p className="error-text">IPC 调用失败：{error}</p> : null}
             </div>
-            {error ? <p className="error-text">IPC 调用失败：{error}</p> : null}
-          </div>
+          ) : (
+            <div className="empty-state">
+              <p className="empty-title">选择一个活动 Agent 会话</p>
+              <p>当前草稿只绑定活动会话；历史会话不会继续编辑。</p>
+            </div>
+          )}
         </section>
       </section>
     </main>
+  );
+}
+
+function MilkdownDraftEditor({
+  disabled,
+  initialValue,
+  onChange,
+}: {
+  disabled: boolean;
+  initialValue: string;
+  onChange: (markdown: string) => void;
+}) {
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  const { loading } = useEditor((root) =>
+    Editor.make()
+      .config((ctx) => {
+        ctx.set(rootCtx, root);
+        ctx.set(defaultValueCtx, initialValue);
+        ctx.get(listenerCtx).markdownUpdated((_, markdown) => {
+          onChangeRef.current(markdown);
+        });
+      })
+      .use(commonmark)
+      .use(history)
+      .use(listener),
+  );
+
+  return (
+    <div className={disabled || loading ? 'milkdown-host disabled' : 'milkdown-host'}>
+      <Milkdown />
+    </div>
   );
 }
 
@@ -589,6 +812,34 @@ function findSession(
       (session) => session.provider === provider && session.sessionId === sessionId,
     ) ?? null
   );
+}
+
+function sessionKey(provider: string, sessionId: string) {
+  return `${provider}:${sessionId}`;
+}
+
+function draftStatusLabel(
+  draft: DraftState | null,
+  saving: boolean,
+  loading: boolean,
+  hasUnsavedChanges: boolean,
+) {
+  if (loading) {
+    return '读取中';
+  }
+  if (saving || hasUnsavedChanges) {
+    return '保存中';
+  }
+  if (!draft || draft.isEmpty) {
+    return '空草稿';
+  }
+  if (draft.copyState === 'copied') {
+    return '已复制';
+  }
+  if (draft.copyState === 'cleared_after_send') {
+    return '已发送清空';
+  }
+  return '已编辑';
 }
 
 function sessionStatusLabel(status: string) {

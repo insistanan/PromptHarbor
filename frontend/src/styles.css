@@ -220,7 +220,7 @@ h3 {
 
 .session-group p,
 .empty-state p,
-.draft-surface p {
+.draft-workspace p {
   color: #5d6b7a;
   font-size: 14px;
   line-height: 1.65;
@@ -270,8 +270,7 @@ h3 {
   padding: 12px 14px;
 }
 
-.empty-state,
-.draft-surface {
+.empty-state {
   margin: auto;
   max-width: 430px;
   padding: 18px;
@@ -378,11 +377,92 @@ h3 {
   cursor: default;
 }
 
-.draft-input {
-  min-height: 96px;
-  margin-top: 14px;
-  border: 1px dashed #b5c3d0;
+.draft-workspace {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(220px, 0.9fr);
+  gap: 12px;
+  padding: 12px;
+}
+
+.milkdown-host {
+  min-height: 220px;
+  overflow: auto;
+  border: 1px solid #cbd3dc;
   border-radius: 7px;
-  color: #6b7886;
-  padding: 14px;
+  background: #ffffff;
+}
+
+.milkdown-host.disabled {
+  opacity: 0.68;
+  pointer-events: none;
+}
+
+.milkdown-host .milkdown {
+  min-height: 100%;
+}
+
+.milkdown-host .ProseMirror {
+  min-height: 220px;
+  outline: none;
+  padding: 14px 16px;
+  color: #1f2933;
+  font-size: 14px;
+  line-height: 1.68;
+}
+
+.milkdown-host .ProseMirror p {
+  margin: 0 0 10px;
+}
+
+.milkdown-host .ProseMirror h1,
+.milkdown-host .ProseMirror h2,
+.milkdown-host .ProseMirror h3 {
+  margin: 12px 0 8px;
+}
+
+.milkdown-host .ProseMirror pre {
+  overflow: auto;
+  border-radius: 6px;
+  background: #15212b;
+  color: #eef6fb;
+  padding: 10px;
+}
+
+.draft-source-panel {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(150px, 1fr) auto;
+  gap: 8px;
+}
+
+.draft-toolbar,
+.draft-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #5b6776;
+  font-size: 12px;
+}
+
+.draft-source-panel textarea {
+  width: 100%;
+  min-height: 150px;
+  resize: none;
+  border: 1px solid #cbd3dc;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #263442;
+  padding: 12px;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.draft-message {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #2f6f53;
+  font-size: 12px;
 }

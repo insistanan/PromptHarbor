@@ -51,6 +51,34 @@ impl PromptStore {
         archive_session(&connection, provider, session_id, force)
     }
 
+    pub fn get_draft(&self, provider: &str, session_id: &str) -> Result<DraftState, String> {
+        let connection = self.open_connection()?;
+        migrate(&connection)?;
+        get_draft(&connection, provider, session_id)
+    }
+
+    pub fn save_draft(
+        &self,
+        provider: &str,
+        session_id: &str,
+        content_md: &str,
+    ) -> Result<DraftState, String> {
+        let connection = self.open_connection()?;
+        migrate(&connection)?;
+        save_draft(&connection, provider, session_id, content_md)
+    }
+
+    pub fn mark_draft_copied(
+        &self,
+        provider: &str,
+        session_id: &str,
+        content_md: &str,
+    ) -> Result<DraftState, String> {
+        let connection = self.open_connection()?;
+        migrate(&connection)?;
+        mark_draft_copied(&connection, provider, session_id, content_md)
+    }
+
     fn open_connection(&self) -> Result<Connection, String> {
         Connection::open(&self.database_path).map_err(|error| {
             format!(
@@ -99,6 +127,20 @@ pub struct ArchiveSessionOutcome {
     pub archived: bool,
     pub requires_confirmation: bool,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftState {
+    pub provider: String,
+    pub session_id: String,
+    pub content_md: String,
+    pub content_hash: String,
+    pub copy_state: String,
+    pub copied_at: Option<String>,
+    pub last_copied_hash: Option<String>,
+    pub updated_at: String,
+    pub is_empty: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -291,6 +333,20 @@ fn record_prompt_event(
         .map_err(|error| format!("写入已发送 prompt 失败：{error}"))?
         > 0;
 
+    if inserted {
+        let prompt_event_id = connection.last_insert_rowid();
+        if let Some(matched_draft_id) =
+            clear_matching_copied_draft(connection, session_db_id, &prompt_hash, &now)?
+        {
+            connection
+                .execute(
+                    "update prompt_events set matched_draft_id = ?1 where id = ?2",
+                    params![matched_draft_id, prompt_event_id],
+                )
+                .map_err(|error| format!("标记已发送 prompt 匹配草稿失败：{error}"))?;
+        }
+    }
+
     let summary = store_summary(connection)?;
     Ok(RecordOutcome {
         inserted,
@@ -421,6 +477,199 @@ fn list_sessions(connection: &Connection) -> Result<SessionList, String> {
     }
 
     Ok(sessions)
+}
+
+fn get_draft(
+    connection: &Connection,
+    provider: &str,
+    session_id: &str,
+) -> Result<DraftState, String> {
+    let session_db_id = session_db_id(connection, provider, session_id)?;
+    draft_state(connection, provider, session_id, session_db_id)
+}
+
+fn save_draft(
+    connection: &Connection,
+    provider: &str,
+    session_id: &str,
+    content_md: &str,
+) -> Result<DraftState, String> {
+    let session_db_id = session_db_id(connection, provider, session_id)?;
+    let content_hash = prompt_hash(content_md);
+    let existing_last_copied_hash = connection
+        .query_row(
+            "select last_copied_hash from drafts where session_db_id = ?1",
+            params![session_db_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| format!("读取当前草稿复制状态失败：{error}"))?
+        .flatten();
+    let copy_state = draft_copy_state(
+        content_md,
+        &content_hash,
+        existing_last_copied_hash.as_deref(),
+    );
+    let now = current_captured_at();
+
+    connection
+        .execute(
+            r#"
+            insert into drafts (session_db_id, content_md, content_hash, copy_state, updated_at)
+            values (?1, ?2, ?3, ?4, ?5)
+            on conflict(session_db_id) do update set
+              content_md = excluded.content_md,
+              content_hash = excluded.content_hash,
+              copy_state = excluded.copy_state,
+              updated_at = excluded.updated_at
+            "#,
+            params![session_db_id, content_md, content_hash, copy_state, now],
+        )
+        .map_err(|error| format!("保存当前草稿失败：{error}"))?;
+
+    draft_state(connection, provider, session_id, session_db_id)
+}
+
+fn mark_draft_copied(
+    connection: &Connection,
+    provider: &str,
+    session_id: &str,
+    content_md: &str,
+) -> Result<DraftState, String> {
+    let session_db_id = session_db_id(connection, provider, session_id)?;
+    let content_hash = prompt_hash(content_md);
+    let now = current_captured_at();
+
+    connection
+        .execute(
+            r#"
+            insert into drafts (
+              session_db_id, content_md, content_hash, copy_state,
+              copied_at, last_copied_hash, updated_at
+            )
+            values (?1, ?2, ?3, 'copied', ?4, ?3, ?4)
+            on conflict(session_db_id) do update set
+              content_md = excluded.content_md,
+              content_hash = excluded.content_hash,
+              copy_state = excluded.copy_state,
+              copied_at = excluded.copied_at,
+              last_copied_hash = excluded.last_copied_hash,
+              updated_at = excluded.updated_at
+            "#,
+            params![session_db_id, content_md, content_hash, now],
+        )
+        .map_err(|error| format!("记录当前草稿复制状态失败：{error}"))?;
+
+    draft_state(connection, provider, session_id, session_db_id)
+}
+
+fn draft_state(
+    connection: &Connection,
+    provider: &str,
+    session_id: &str,
+    session_db_id: i64,
+) -> Result<DraftState, String> {
+    let draft = connection
+        .query_row(
+            r#"
+            select content_md, content_hash, copy_state, copied_at, last_copied_hash, updated_at
+            from drafts
+            where session_db_id = ?1
+            "#,
+            params![session_db_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("读取当前草稿失败：{error}"))?;
+
+    let (content_md, content_hash, copy_state, copied_at, last_copied_hash, updated_at) = draft
+        .unwrap_or_else(|| {
+            (
+                String::new(),
+                prompt_hash(""),
+                "idle".to_string(),
+                None,
+                None,
+                current_captured_at(),
+            )
+        });
+    let is_empty = content_md.trim().is_empty();
+
+    Ok(DraftState {
+        provider: provider.to_string(),
+        session_id: session_id.to_string(),
+        content_md,
+        content_hash,
+        copy_state,
+        copied_at,
+        last_copied_hash,
+        updated_at,
+        is_empty,
+    })
+}
+
+fn clear_matching_copied_draft(
+    connection: &Connection,
+    session_db_id: i64,
+    sent_prompt_hash: &str,
+    now: &str,
+) -> Result<Option<i64>, String> {
+    let matched_draft_id = connection
+        .query_row(
+            r#"
+            select id
+            from drafts
+            where session_db_id = ?1
+              and content_hash = ?2
+              and last_copied_hash = ?2
+              and trim(content_md) != ''
+            "#,
+            params![session_db_id, sent_prompt_hash],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|error| format!("匹配已复制草稿失败：{error}"))?;
+
+    if let Some(draft_id) = matched_draft_id {
+        connection
+            .execute(
+                r#"
+                update drafts
+                set content_md = '',
+                    content_hash = ?1,
+                    copy_state = 'cleared_after_send',
+                    updated_at = ?2
+                where id = ?3
+                "#,
+                params![prompt_hash(""), now, draft_id],
+            )
+            .map_err(|error| format!("清空已发送草稿失败：{error}"))?;
+    }
+
+    Ok(matched_draft_id)
+}
+
+fn draft_copy_state(
+    content_md: &str,
+    content_hash: &str,
+    last_copied_hash: Option<&str>,
+) -> String {
+    if content_md.trim().is_empty() {
+        "idle".to_string()
+    } else if last_copied_hash == Some(content_hash) {
+        "copied".to_string()
+    } else {
+        "dirty".to_string()
+    }
 }
 
 fn archive_session(
@@ -706,6 +955,82 @@ mod tests {
         assert!(blocked.requires_confirmation);
         assert!(archived.archived);
         assert_eq!(sessions.archived.len(), 1);
+    }
+
+    #[test]
+    fn saves_and_marks_current_draft_as_copied() {
+        let home = isolated_home("draft-store");
+        let store = PromptStore::new(home.join("promptbox.sqlite"));
+        store.initialize().unwrap();
+        let event = test_event("claude", "draft-session", "first prompt");
+        store.record_prompt_event(&event).unwrap();
+
+        let saved = store
+            .save_draft("claude", "draft-session", "  next prompt\n")
+            .unwrap();
+        let copied = store
+            .mark_draft_copied("claude", "draft-session", "  next prompt\n")
+            .unwrap();
+
+        assert_eq!(saved.copy_state, "dirty");
+        assert_eq!(copied.copy_state, "copied");
+        assert_eq!(copied.content_hash, prompt_hash("next prompt"));
+        assert_eq!(
+            copied.last_copied_hash.as_deref(),
+            Some(copied.content_hash.as_str())
+        );
+        assert!(!copied.is_empty);
+    }
+
+    #[test]
+    fn matching_copied_prompt_clears_current_draft() {
+        let home = isolated_home("draft-clear-store");
+        let store = PromptStore::new(home.join("promptbox.sqlite"));
+        store.initialize().unwrap();
+        store
+            .record_prompt_event(&test_event("claude", "draft-session", "first prompt"))
+            .unwrap();
+        store
+            .mark_draft_copied("claude", "draft-session", "send this prompt")
+            .unwrap();
+
+        store
+            .record_prompt_event(&test_event("claude", "draft-session", " send this prompt "))
+            .unwrap();
+        let draft = store.get_draft("claude", "draft-session").unwrap();
+        let connection = store.open_connection().unwrap();
+        let matched_count: i64 = connection
+            .query_row(
+                "select count(*) from prompt_events where matched_draft_id is not null",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert!(draft.is_empty);
+        assert_eq!(draft.copy_state, "cleared_after_send");
+        assert_eq!(matched_count, 1);
+    }
+
+    #[test]
+    fn mismatched_prompt_keeps_current_draft() {
+        let home = isolated_home("draft-mismatch-store");
+        let store = PromptStore::new(home.join("promptbox.sqlite"));
+        store.initialize().unwrap();
+        store
+            .record_prompt_event(&test_event("claude", "draft-session", "first prompt"))
+            .unwrap();
+        store
+            .mark_draft_copied("claude", "draft-session", "send this prompt")
+            .unwrap();
+
+        store
+            .record_prompt_event(&test_event("claude", "draft-session", "changed prompt"))
+            .unwrap();
+        let draft = store.get_draft("claude", "draft-session").unwrap();
+
+        assert_eq!(draft.content_md, "send this prompt");
+        assert_eq!(draft.copy_state, "copied");
     }
 
     #[test]

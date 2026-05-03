@@ -11,6 +11,8 @@
     "tauri:build": "cd ../crates/promptbox-app && cargo tauri build"
   },
   "dependencies": {
+    "@milkdown/kit": "^7.20.0",
+    "@milkdown/react": "^7.20.0",
     "@tauri-apps/api": "^2.0.0",
     "promptharbor": "file:..",
     "react": "^19.0.0",

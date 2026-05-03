@@ -1,7 +1,7 @@
 use promptbox_core::{
     clear_spool_events, parse_local_endpoint, read_spool_events, AppStatus, ArchiveSessionOutcome,
-    ClaudeHookStatus, CodexHookStatus, PromptEvent, PromptStore, RuntimeState, SessionList,
-    HOOK_EVENTS_PATH, MAX_HOOK_BODY_BYTES,
+    ClaudeHookStatus, CodexHookStatus, DraftState, PromptEvent, PromptStore, RuntimeState,
+    SessionList, HOOK_EVENTS_PATH, MAX_HOOK_BODY_BYTES,
 };
 use std::{
     io::{Read, Write},
@@ -73,6 +73,47 @@ fn archive_session(
 }
 
 #[tauri::command]
+fn get_draft(
+    state: tauri::State<'_, StartupState>,
+    provider: String,
+    session_id: String,
+) -> Result<DraftState, String> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| "数据库尚未初始化".to_string())?;
+    store.get_draft(&provider, &session_id)
+}
+
+#[tauri::command]
+fn save_draft(
+    state: tauri::State<'_, StartupState>,
+    provider: String,
+    session_id: String,
+    content_md: String,
+) -> Result<DraftState, String> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| "数据库尚未初始化".to_string())?;
+    store.save_draft(&provider, &session_id, &content_md)
+}
+
+#[tauri::command]
+fn mark_draft_copied(
+    state: tauri::State<'_, StartupState>,
+    provider: String,
+    session_id: String,
+    content_md: String,
+) -> Result<DraftState, String> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| "数据库尚未初始化".to_string())?;
+    store.mark_draft_copied(&provider, &session_id, &content_md)
+}
+
+#[tauri::command]
 fn claude_hook_status() -> Result<ClaudeHookStatus, String> {
     let paths = promptbox_core::resolve_promptbox_paths()?;
     promptbox_core::detect_claude_user_hook(&paths.hook_binary_path)
@@ -118,6 +159,9 @@ pub fn run() {
             app_status,
             list_sessions,
             archive_session,
+            get_draft,
+            save_draft,
+            mark_draft_copied,
             claude_hook_status,
             install_claude_hook,
             codex_hook_status,

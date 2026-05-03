@@ -17,7 +17,8 @@ pub use runtime::{
     DEFAULT_LOCAL_ENDPOINT, HOOK_PROTOCOL_VERSION,
 };
 pub use store::{
-    ArchiveSessionOutcome, PromptStore, RecordOutcome, SessionList, SessionListItem, StoreSummary,
+    ArchiveSessionOutcome, DraftState, PromptStore, RecordOutcome, SessionList, SessionListItem,
+    StoreSummary,
 };
 
 pub fn initialize_runtime() -> Result<RuntimeState, String> {
