@@ -359,6 +359,43 @@ mod tests {
         assert_eq!(outcome.prompt_event_count, 1);
     }
 
+    #[test]
+    fn records_codex_turn_id_and_deduplicates_repeated_turn() {
+        let home = isolated_home("codex-store");
+        let store = PromptStore::new(home.join("promptbox.sqlite"));
+        store.initialize().unwrap();
+
+        let event = PromptEvent {
+            provider: Provider::Codex,
+            event_name: "UserPromptSubmit".to_string(),
+            session_id: "codex-session-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            cwd: Some("D:\\code\\some\\prompt".to_string()),
+            transcript_path: Some("D:\\codex\\rollout.jsonl".to_string()),
+            model: Some("gpt-test".to_string()),
+            prompt: Some("implement codex hook".to_string()),
+            captured_at: "2026-05-03T12:00:00.000Z".to_string(),
+            raw_json: json!({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "codex-session-1",
+                "turn_id": "turn-1",
+                "prompt": "implement codex hook"
+            }),
+        };
+
+        let first = store.record_prompt_event(&event).unwrap();
+        let second = store.record_prompt_event(&event).unwrap();
+
+        assert!(first.inserted);
+        assert!(!second.inserted);
+        assert_eq!(second.session_count, 1);
+        assert_eq!(second.prompt_event_count, 1);
+        assert_eq!(
+            second.ignored_reason.as_deref(),
+            Some("重复 turn_id，已忽略")
+        );
+    }
+
     fn isolated_home(name: &str) -> PathBuf {
         let millis = SystemTime::now()
             .duration_since(UNIX_EPOCH)

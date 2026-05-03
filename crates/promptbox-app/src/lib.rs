@@ -1,6 +1,6 @@
 use promptbox_core::{
     clear_spool_events, parse_local_endpoint, read_spool_events, AppStatus, ClaudeHookStatus,
-    PromptEvent, PromptStore, RuntimeState, HOOK_EVENTS_PATH, MAX_HOOK_BODY_BYTES,
+    CodexHookStatus, PromptEvent, PromptStore, RuntimeState, HOOK_EVENTS_PATH, MAX_HOOK_BODY_BYTES,
 };
 use std::{
     io::{Read, Write},
@@ -53,6 +53,18 @@ fn install_claude_hook() -> Result<ClaudeHookStatus, String> {
     promptbox_core::install_claude_user_hook(&paths.hook_binary_path)
 }
 
+#[tauri::command]
+fn codex_hook_status() -> Result<CodexHookStatus, String> {
+    let paths = promptbox_core::resolve_promptbox_paths()?;
+    promptbox_core::detect_codex_user_hook(&paths.hook_binary_path)
+}
+
+#[tauri::command]
+fn install_codex_hook() -> Result<CodexHookStatus, String> {
+    let paths = promptbox_core::resolve_promptbox_paths()?;
+    promptbox_core::install_codex_user_hook(&paths.hook_binary_path)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -74,7 +86,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_status,
             claude_hook_status,
-            install_claude_hook
+            install_claude_hook,
+            codex_hook_status,
+            install_codex_hook
         ])
         .run(tauri::generate_context!())
         .expect("error while running PromptHarbor");

@@ -1,9 +1,11 @@
 mod claude;
+mod codex;
 mod event;
 mod runtime;
 mod store;
 
 pub use claude::{detect_claude_user_hook, install_claude_user_hook, ClaudeHookStatus};
+pub use codex::{detect_codex_user_hook, install_codex_user_hook, CodexHookStatus};
 pub use event::{
     append_spool_event, clear_spool_events, current_captured_at, endpoint_host_port,
     import_spool_events, normalize_hook_input, parse_local_endpoint, read_spool_events,

@@ -42,6 +42,18 @@ type ClaudeHookStatus = {
   backupPath: string | null;
 };
 
+type CodexHookStatus = {
+  hooksPath: string;
+  configPath: string;
+  expectedCommand: string;
+  hookInstalled: boolean;
+  codexHooksEnabled: boolean;
+  ready: boolean;
+  message: string;
+  hooksBackupPath: string | null;
+  configBackupPath: string | null;
+};
+
 const menuItems = [
   { label: '会话', active: true },
   { label: '草稿', active: false },
@@ -52,8 +64,10 @@ const menuItems = [
 export function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [claudeStatus, setClaudeStatus] = useState<ClaudeHookStatus | null>(null);
+  const [codexStatus, setCodexStatus] = useState<CodexHookStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [installingClaude, setInstallingClaude] = useState(false);
+  const [installingCodex, setInstallingCodex] = useState(false);
 
   useEffect(() => {
     let disposed = false;
@@ -73,17 +87,35 @@ export function App() {
     };
 
     loadStatus();
-    invoke<ClaudeHookStatus>('claude_hook_status')
-      .then((nextStatus) => {
-        if (!disposed) {
-          setClaudeStatus(nextStatus);
-        }
-      })
-      .catch((reason) => {
-        if (!disposed) {
-          setError(String(reason));
-        }
-      });
+    const loadClaudeStatus = () => {
+      invoke<ClaudeHookStatus>('claude_hook_status')
+        .then((nextStatus) => {
+          if (!disposed) {
+            setClaudeStatus(nextStatus);
+          }
+        })
+        .catch((reason) => {
+          if (!disposed) {
+            setError(String(reason));
+          }
+        });
+    };
+    const loadCodexStatus = () => {
+      invoke<CodexHookStatus>('codex_hook_status')
+        .then((nextStatus) => {
+          if (!disposed) {
+            setCodexStatus(nextStatus);
+          }
+        })
+        .catch((reason) => {
+          if (!disposed) {
+            setError(String(reason));
+          }
+        });
+    };
+
+    loadClaudeStatus();
+    loadCodexStatus();
     const timer = window.setInterval(loadStatus, 1000);
     return () => {
       disposed = true;
@@ -100,6 +132,16 @@ export function App() {
       })
       .catch((reason) => setError(String(reason)))
       .finally(() => setInstallingClaude(false));
+  };
+  const installCodexHook = () => {
+    setInstallingCodex(true);
+    invoke<CodexHookStatus>('install_codex_hook')
+      .then((nextStatus) => {
+        setCodexStatus(nextStatus);
+        setError(null);
+      })
+      .catch((reason) => setError(String(reason)))
+      .finally(() => setInstallingCodex(false));
   };
   const sessionGroups = [
     { label: '活动', count: status?.sessionCount ?? 0, detail: '真实提交 prompt 后出现' },
@@ -256,6 +298,67 @@ export function App() {
               type="button"
             >
               {installingClaude ? '安装中' : '安装用户级 hook'}
+            </button>
+          </div>
+        </section>
+
+        <section className="wizard-panel" aria-label="Codex CLI 配置向导">
+          <div className="section-heading">
+            <h3>Codex CLI</h3>
+            <span className={codexStatus?.ready ? 'ok-text' : 'warning-text'}>
+              {codexStatus?.ready ? 'hook 可用' : 'hook 未就绪'}
+            </span>
+          </div>
+          <dl className="runtime-list">
+            <div>
+              <dt>hooks.json</dt>
+              <dd>{codexStatus?.hooksPath ?? '读取中'}</dd>
+            </div>
+            <div>
+              <dt>config.toml</dt>
+              <dd>{codexStatus?.configPath ?? '读取中'}</dd>
+            </div>
+            <div>
+              <dt>hook 命令</dt>
+              <dd>{codexStatus?.expectedCommand ?? '读取中'}</dd>
+            </div>
+            <div>
+              <dt>hook 状态</dt>
+              <dd className={codexStatus?.hookInstalled ? 'ok-text' : 'warning-text'}>
+                {codexStatus?.hookInstalled ? '已安装' : '未安装'}
+              </dd>
+            </div>
+            <div>
+              <dt>feature</dt>
+              <dd className={codexStatus?.codexHooksEnabled ? 'ok-text' : 'warning-text'}>
+                {codexStatus?.codexHooksEnabled ? 'codex_hooks 已开启' : 'codex_hooks 未开启'}
+              </dd>
+            </div>
+            <div>
+              <dt>检测结果</dt>
+              <dd>{codexStatus?.message ?? '等待检测'}</dd>
+            </div>
+            {codexStatus?.hooksBackupPath ? (
+              <div>
+                <dt>hooks 备份</dt>
+                <dd>{codexStatus.hooksBackupPath}</dd>
+              </div>
+            ) : null}
+            {codexStatus?.configBackupPath ? (
+              <div>
+                <dt>config 备份</dt>
+                <dd>{codexStatus.configBackupPath}</dd>
+              </div>
+            ) : null}
+          </dl>
+          <div className="wizard-actions">
+            <button
+              className="primary-action"
+              disabled={installingCodex || codexStatus?.ready}
+              onClick={installCodexHook}
+              type="button"
+            >
+              {installingCodex ? '安装中' : '安装用户级 hook'}
             </button>
           </div>
         </section>
