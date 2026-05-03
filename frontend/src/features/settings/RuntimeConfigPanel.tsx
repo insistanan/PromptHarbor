@@ -23,7 +23,6 @@ export function RuntimeConfigPanel({
         <label className="switch-row">
           <span>
             <strong>开机启动</strong>
-            <small>写入当前用户的 Windows 启动项</small>
           </span>
           <input
             checked={configDraft?.autostart ?? false}
@@ -34,7 +33,6 @@ export function RuntimeConfigPanel({
         <label className="switch-row">
           <span>
             <strong>暂停记录</strong>
-            <small>开启后钩子仍可运行，但不会写入新提示词</small>
           </span>
           <input
             checked={configDraft?.recordingPaused ?? false}
@@ -44,15 +42,15 @@ export function RuntimeConfigPanel({
         </label>
         <label className="config-field">
           <span>本地采集端点</span>
+          {/* 保存后写入配置，监听端口随应用重启切换。 */}
           <input
             onChange={(event) => onChange({ localEndpoint: event.currentTarget.value })}
             value={configDraft?.localEndpoint ?? ''}
           />
-          <small>端口修改保存后写入配置；监听端口需重启应用后切换。</small>
         </label>
         <div className="config-field-grid">
           <label className="config-field">
-            <span>可能关闭判定</span>
+            <span>关闭判定（小时）</span>
             <input
               min="1"
               onChange={(event) =>
@@ -61,10 +59,10 @@ export function RuntimeConfigPanel({
               type="number"
               value={configDraft?.maybeClosedAfterHours ?? '12'}
             />
-            <small>小时</small>
           </label>
           <label className="config-field">
             <span>原始事件保留天数</span>
+            {/* 0 表示启动后即过期。 */}
             <input
               min="0"
               onChange={(event) =>
@@ -75,13 +73,11 @@ export function RuntimeConfigPanel({
               type="number"
               value={configDraft?.rawHookEventsRetentionDays ?? '7'}
             />
-            <small>0 表示启动后即过期</small>
           </label>
         </div>
         <label className="switch-row">
           <span>
             <strong>保留原始钩子事件</strong>
-            <small>仅用于短期诊断，正式历史仍只保存用户提示词</small>
           </span>
           <input
             checked={configDraft?.retainRawHookEvents ?? true}

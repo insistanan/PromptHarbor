@@ -19,6 +19,8 @@ import {
 import { useDraftContextMenu } from './useDraftContextMenu';
 import { useDraftImages } from './useDraftImages';
 
+const DRAFT_AUTO_SAVE_DELAY_MS = 1200;
+
 type UseDraftWorkspaceStateOptions = {
   activeSessions: SessionListItem[];
   activeView: MainView;
@@ -240,12 +242,12 @@ export function useDraftWorkspaceState({
           setLastSavedDraftContent(nextDraft.contentMd);
           draftCacheRef.current[selectedDraftKey] = nextDraft.contentMd;
           setDraftList((current) => replaceDraftListItem(current, nextDraft));
-          setDraftMessage(nextDraft.isEmpty ? null : '草稿已保存');
+          setDraftMessage(null);
           onError(null);
         })
         .catch((reason) => onError(String(reason)))
         .finally(() => setDraftSaving(false));
-    }, 500);
+    }, DRAFT_AUTO_SAVE_DELAY_MS);
 
     return () => window.clearTimeout(timer);
   }, [
@@ -295,7 +297,7 @@ export function useDraftWorkspaceState({
           draftCacheRef.current[selectedDraftKey] = nextDraft.contentMd;
         }
         setDraftList((current) => replaceDraftListItem(current, nextDraft));
-        setDraftMessage('文本已复制，等待 Agent hook 匹配真实提交');
+        setDraftMessage('文本已复制');
         onNotice('文本已复制');
         onError(null);
       })
@@ -420,6 +422,7 @@ export function useDraftWorkspaceState({
       onDeleteDraft: deleteDraftItem,
       onDraftChange: updateDraftContent,
       onOpenDraftContextMenu: openDraftContextMenu,
+      onOpenSessionHistory: onSelectSession,
       onPasteImages: addDraftImages,
       onPreviewImage: previewDraftImage,
       onRemoveImage: removeDraftImage,

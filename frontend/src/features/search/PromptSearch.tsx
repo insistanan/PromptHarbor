@@ -91,19 +91,18 @@ export function PromptSearch({
 
   return (
     <section className="search-panel" aria-label="prompt 搜索">
-      <div className="section-heading">
-        <h3>搜索</h3>
-        <span>{searchLoading ? '搜索中' : `${searchResults.items.length} 条`}</span>
-      </div>
       <div className="search-body">
         <div className="search-row">
           <input
             aria-label="搜索会话标题、prompt 和当前草稿"
             onChange={(event) => setSearchQuery(event.currentTarget.value)}
-            placeholder="搜索会话标题、首条 prompt、已发送 prompt、当前草稿"
+            placeholder="搜索 prompt"
             type="search"
             value={searchQuery}
           />
+          <span className="search-count-pill">
+            {searchLoading ? '搜索中' : `${searchResults.items.length} 条`}
+          </span>
           <label className="check-control">
             <input
               checked={hideLowInfo}
@@ -147,8 +146,7 @@ function SearchResultsList({
           <span>
             <strong>{item.title}</strong>
             <small>
-              {item.matchLabel} · {item.providerLabel} · {item.shortSessionId} ·{' '}
-              {item.projectName}
+              {item.matchLabel} · {item.providerLabel} · {item.projectName}
             </small>
           </span>
           <em>{item.snippet}</em>

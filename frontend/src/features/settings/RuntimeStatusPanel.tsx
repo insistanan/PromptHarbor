@@ -9,6 +9,14 @@ export function RuntimeStatusPanel({ status }: { status: AppStatus | null }) {
       </div>
       <dl className="runtime-list">
         <div>
+          <dt>版本</dt>
+          <dd>{status?.version ? `v${status.version}` : '读取中'}</dd>
+        </div>
+        <div>
+          <dt>本地端点</dt>
+          <dd>{status?.localEndpoint ?? '读取中'}</dd>
+        </div>
+        <div>
           <dt>数据目录</dt>
           <dd>{status?.promptboxHome ?? '未初始化'}</dd>
         </div>

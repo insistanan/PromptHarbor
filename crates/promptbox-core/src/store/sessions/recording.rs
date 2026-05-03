@@ -1,17 +1,15 @@
 use super::super::{
-    attachments, drafts,
+    drafts,
     schema::store_summary,
     text::{is_low_info_prompt, prompt_hash, session_db_id, short_session_title, title_from_prompt},
     types::RecordOutcome,
 };
 use crate::{current_captured_at, PromptEvent};
 use rusqlite::{params, Connection};
-use std::path::Path;
 
 pub(in crate::store) fn record_prompt_event(
     connection: &Connection,
     event: &PromptEvent,
-    attachment_root: &Path,
 ) -> Result<RecordOutcome, String> {
     if event.event_name != "UserPromptSubmit" {
         return ignored(
@@ -148,29 +146,17 @@ pub(in crate::store) fn record_prompt_event(
                 ignored_reason: (!inserted).then_some("重复 turn_id，已忽略".to_string()),
                 session_count: summary.session_count,
                 prompt_event_count: summary.prompt_event_count,
+                prompt_event_id,
             },
             prompt_event_id,
         ))
     })();
 
     match transaction_result {
-        Ok((outcome, prompt_event_id)) => {
+        Ok((outcome, _prompt_event_id)) => {
             if let Err(error) = connection.execute_batch("commit") {
                 let _ = connection.execute_batch("rollback");
                 return Err(format!("提交已发送 prompt 入库事务失败：{error}"));
-            }
-
-            if let Some(prompt_event_id) = prompt_event_id {
-                if let Err(error) = attachments::store_prompt_event_attachments(
-                    connection,
-                    event,
-                    &prompt,
-                    prompt_event_id,
-                    attachment_root,
-                    &now,
-                ) {
-                    eprintln!("提取 prompt 图片附件失败：{error}");
-                }
             }
 
             Ok(outcome)
@@ -189,5 +175,6 @@ fn ignored(connection: &Connection, reason: String) -> Result<RecordOutcome, Str
         ignored_reason: Some(reason),
         session_count: summary.session_count,
         prompt_event_count: summary.prompt_event_count,
+        prompt_event_id: None,
     })
 }

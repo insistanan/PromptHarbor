@@ -1,9 +1,12 @@
 use std::{path::PathBuf, process::Command as ProcessCommand};
 use tauri::{
-    menu::{Menu, MenuItem},
+    image::Image,
+    menu::{IconMenuItem, Menu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, PhysicalPosition, Runtime, WebviewWindow, Window, WindowEvent,
 };
+
+const APP_ICON_BYTES: &[u8] = include_bytes!("../icons/icon.png");
 
 pub(crate) fn prevent_close_and_hide<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
     if let WindowEvent::CloseRequested { api, .. } = event {
@@ -13,8 +16,16 @@ pub(crate) fn prevent_close_and_hide<R: Runtime>(window: &Window<R>, event: &Win
 }
 
 pub(crate) fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "打开主窗口", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 PromptHarbor", true, None::<&str>)?;
+    let app_icon = app_icon();
+    let open = IconMenuItem::with_id(
+        app,
+        "open",
+        "打开主窗口",
+        true,
+        app_icon.clone(),
+        None::<&str>,
+    )?;
+    let quit = IconMenuItem::with_id(app, "quit", "退出 PromptHarbor", true, None, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
     let mut tray = TrayIconBuilder::new()
         .menu(&menu)
@@ -36,12 +47,24 @@ pub(crate) fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
             }
         });
 
-    if let Some(icon) = app.default_window_icon() {
+    if let Some(window) = app.get_webview_window("main") {
+        if let Some(icon) = app_icon.clone() {
+            let _ = window.set_icon(icon);
+        }
+    }
+
+    if let Some(icon) = app_icon {
+        tray = tray.icon(icon);
+    } else if let Some(icon) = app.default_window_icon() {
         tray = tray.icon(icon.clone());
     }
 
     tray.build(app)?;
     Ok(())
+}
+
+fn app_icon() -> Option<Image<'static>> {
+    Image::from_bytes(APP_ICON_BYTES).ok()
 }
 
 pub(crate) fn show_main_window(app: &tauri::AppHandle) {

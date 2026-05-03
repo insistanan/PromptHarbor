@@ -26,7 +26,7 @@ type UseSessionBrowserStateOptions = {
 
 type SessionBrowserStateProps = Omit<
   SessionBrowserProps,
-  'onArchiveSelectedSession'
+  'onArchiveSelectedSession' | 'onOpenSessionDrafts'
 >;
 
 type UseSessionBrowserStateResult = {

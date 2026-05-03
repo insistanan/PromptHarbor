@@ -36,9 +36,47 @@ impl PromptStore {
     }
 
     pub fn record_prompt_event(&self, event: &PromptEvent) -> Result<RecordOutcome, String> {
+        let outcome = self.record_prompt_event_without_attachments(event)?;
+        if let (Some(prompt_event_id), Some(prompt)) = (
+            outcome.prompt_event_id,
+            event.prompt
+                .as_ref()
+                .map(|prompt| prompt.trim())
+                .filter(|prompt| !prompt.is_empty()),
+        ) {
+            if let Err(error) = self.capture_prompt_event_attachments(event, prompt_event_id, prompt)
+            {
+                eprintln!("提取 prompt 图片附件失败：{error}");
+            }
+        }
+        Ok(outcome)
+    }
+
+    pub fn record_prompt_event_without_attachments(
+        &self,
+        event: &PromptEvent,
+    ) -> Result<RecordOutcome, String> {
         let connection = self.open_connection()?;
         migrate(&connection)?;
-        sessions::record_prompt_event(&connection, event, &self.attachment_root())
+        sessions::record_prompt_event(&connection, event)
+    }
+
+    pub fn capture_prompt_event_attachments(
+        &self,
+        event: &PromptEvent,
+        prompt_event_id: i64,
+        prompt: &str,
+    ) -> Result<usize, String> {
+        let connection = self.open_connection()?;
+        migrate(&connection)?;
+        attachments::store_prompt_event_attachments(
+            &connection,
+            event,
+            prompt,
+            prompt_event_id,
+            &self.attachment_root(),
+            &crate::current_captured_at(),
+        )
     }
 
     pub fn summary(&self) -> Result<StoreSummary, String> {

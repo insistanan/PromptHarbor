@@ -3,10 +3,17 @@ use crate::{
     local_http::{HttpRequest, HttpResponse},
 };
 use promptbox_core::{PromptEvent, PromptStore, HOOK_EVENTS_PATH};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
+    time::Duration,
 };
+
+const ATTACHMENT_CAPTURE_RETRIES: usize = 12;
+const ATTACHMENT_CAPTURE_RETRY_DELAY_MS: u64 = 250;
 
 pub(crate) struct HookEventProcessor<'a> {
     token: &'a str,
@@ -55,13 +62,49 @@ impl<'a> HookEventProcessor<'a> {
             }
         };
 
-        if let Err(error) = self.store.record_prompt_event(&event) {
-            let message = format!("写入正式历史失败：{error}");
-            self.state.record_error(message.clone());
-            return HttpResponse::new(500, "Internal Server Error", message);
+        let outcome = match self.store.record_prompt_event_without_attachments(&event) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let message = format!("写入正式历史失败：{error}");
+                self.state.record_error(message.clone());
+                return HttpResponse::new(500, "Internal Server Error", message);
+            }
+        };
+
+        if let (Some(prompt_event_id), Some(prompt)) = (
+            outcome.prompt_event_id,
+            event
+                .prompt
+                .as_ref()
+                .map(|prompt| prompt.trim().to_string())
+                .filter(|prompt| !prompt.is_empty()),
+        ) {
+            spawn_attachment_capture(self.store.clone(), event.clone(), prompt_event_id, prompt);
         }
 
         self.state.record_received();
         HttpResponse::new(204, "No Content", String::new())
     }
+}
+
+fn spawn_attachment_capture(
+    store: PromptStore,
+    event: PromptEvent,
+    prompt_event_id: i64,
+    prompt: String,
+) {
+    thread::spawn(move || {
+        for attempt in 0..=ATTACHMENT_CAPTURE_RETRIES {
+            match store.capture_prompt_event_attachments(&event, prompt_event_id, &prompt) {
+                Ok(captured) if captured > 0 => return,
+                Ok(_) if event.transcript_path.is_none() => return,
+                Ok(_) if attempt == ATTACHMENT_CAPTURE_RETRIES => return,
+                Ok(_) => thread::sleep(Duration::from_millis(ATTACHMENT_CAPTURE_RETRY_DELAY_MS)),
+                Err(error) => {
+                    eprintln!("提取 prompt 图片附件失败：{error}");
+                    return;
+                }
+            }
+        }
+    });
 }

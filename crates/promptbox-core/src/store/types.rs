@@ -106,6 +106,8 @@ pub struct RecordOutcome {
     pub ignored_reason: Option<String>,
     pub session_count: usize,
     pub prompt_event_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_event_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

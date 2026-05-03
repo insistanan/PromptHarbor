@@ -1,5 +1,5 @@
 import type { SessionListItem } from '../../appTypes';
-import { sessionResumeCommand } from './sessionHelpers';
+import { displaySessionPath } from './sessionHelpers';
 
 export function SessionReferenceCard({
   deleting,
@@ -22,48 +22,72 @@ export function SessionReferenceCard({
     );
   }
 
-  const command = sessionResumeCommand(session);
+  const projectPath = displaySessionPath(session.cwd);
+  const projectLabel = session.projectName || projectPath || '暂无项目路径';
+  const providerIconSrc = sessionProviderIconSrc(session.provider);
 
   return (
     <section className="session-reference" aria-label="会话引用信息">
-      <span className="session-provider-chip">{session.providerLabel}</span>
+      <span className="session-provider-chip">
+        {providerIconSrc ? (
+          <img
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+            src={providerIconSrc}
+          />
+        ) : null}
+        <span>{session.providerLabel}</span>
+      </span>
       <div className="session-reference-row">
-        <span className="session-id-text" title={command}>
-          {command}
+        <span className="session-project-text" title={projectPath || projectLabel}>
+          {projectLabel}
         </span>
+      </div>
+      <div className="session-reference-actions">
         <button
-          aria-label={`复制恢复命令：${command}`}
+          aria-label="复制恢复命令"
           className="icon-action"
           onClick={onCopyCommand}
-          title={command}
+          title="复制恢复命令"
           type="button"
         >
           <CopyIcon />
         </button>
+        <button
+          aria-label={deleting ? '删除中' : '删除 PromptHarbor 本地会话记录'}
+          className="icon-action danger-icon-action"
+          disabled={deleting}
+          onClick={onDelete}
+          title={deleting ? '删除中' : '删除 PromptHarbor 本地会话记录'}
+          type="button"
+        >
+          <TrashIcon />
+        </button>
       </div>
-      <button
-        aria-label="删除 PromptHarbor 本地会话记录"
-        className="danger-icon-action"
-        disabled={deleting}
-        onClick={onDelete}
-        title="删除 PromptHarbor 本地会话记录"
-        type="button"
-      >
-        <TrashIcon />
-        <span>{deleting ? '删除中' : '删除会话'}</span>
-      </button>
       <button
         className="project-path-button"
         disabled={!session.cwd}
         onClick={onOpenPath}
-        title={session.cwd ?? '暂无项目路径'}
+        title={projectPath || '暂无项目路径'}
         type="button"
       >
         <FolderIcon />
-        <span>{session.cwd ?? '暂无项目路径'}</span>
+        <span>{projectPath || '暂无项目路径'}</span>
       </button>
     </section>
   );
+}
+
+function sessionProviderIconSrc(provider: string) {
+  const normalized = provider.toLowerCase();
+  if (normalized.includes('codex')) {
+    return '/provider-codex.png';
+  }
+  if (normalized.includes('claude')) {
+    return '/provider-claude-code.png';
+  }
+  return null;
 }
 
 function CopyIcon() {

@@ -13,11 +13,12 @@ pub(in crate::store) fn store_prompt_event_attachments(
     prompt_event_id: i64,
     attachment_root: &Path,
     created_at: &str,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let images = extract_prompt_images(event, prompt);
     if images.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
+    let image_count = images.len();
 
     let provider = event.provider.as_str();
     let attachment_dir = attachment_dir(attachment_root, provider, &event.session_id);
@@ -66,7 +67,7 @@ pub(in crate::store) fn store_prompt_event_attachments(
             .map_err(|error| format!("写入 prompt 图片附件记录失败：{error}"))?;
     }
 
-    Ok(())
+    Ok(image_count)
 }
 
 fn attachment_dir(attachment_root: &Path, provider: &str, session_id: &str) -> PathBuf {
