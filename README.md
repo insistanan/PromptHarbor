@@ -44,6 +44,24 @@ PromptBox home 默认路径：
 promptbox-hook.exe --version
 ```
 
+本地采集端点默认监听 `127.0.0.1:9996`。隔离测试 hook 投递与 spool fallback 时，可以先设置临时 home：
+
+```powershell
+$env:PROMPTBOX_HOME = Join-Path $PWD ".tmp\promptbox-home-issue3"
+$env:PROMPTBOX_HOOK_SOURCE = Join-Path $PWD "target\debug\promptbox-hook.exe"
+```
+
+hook 的最小输入示例：
+
+```json
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "demo-session",
+  "cwd": "D:\\code\\some\\prompt",
+  "prompt": "测试 PromptHarbor 采集链路"
+}
+```
+
 安装前端依赖：
 
 ```powershell

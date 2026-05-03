@@ -22,6 +22,10 @@ type AppStatus = {
   configReady: boolean;
   hookBinaryReady: boolean;
   hookBinaryMessage: string;
+  collectorReady: boolean;
+  collectorMessage: string;
+  importedSpoolEvents: number;
+  receivedPromptEvents: number;
   startupErrors: string[];
 };
 
@@ -43,9 +47,28 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    invoke<AppStatus>('app_status')
-      .then(setStatus)
-      .catch((reason) => setError(String(reason)));
+    let disposed = false;
+    const loadStatus = () => {
+      invoke<AppStatus>('app_status')
+        .then((nextStatus) => {
+          if (!disposed) {
+            setStatus(nextStatus);
+            setError(null);
+          }
+        })
+        .catch((reason) => {
+          if (!disposed) {
+            setError(String(reason));
+          }
+        });
+    };
+
+    loadStatus();
+    const timer = window.setInterval(loadStatus, 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   return (
@@ -93,6 +116,7 @@ export function App() {
           <div className="status-strip" aria-label="应用状态">
             <span>{status?.version ? `v${status.version}` : '版本读取中'}</span>
             <span>{status?.localEndpoint ?? '采集端点待连接'}</span>
+            <span>{status ? (status.collectorReady ? '采集就绪' : '采集不可用') : '采集状态读取中'}</span>
             <span>{status?.hookBinaryReady ? 'hook 就绪' : 'hook 待处理'}</span>
           </div>
         </header>
@@ -120,6 +144,20 @@ export function App() {
               <dd className={status?.hookBinaryReady ? 'ok-text' : 'warning-text'}>
                 {status?.hookBinaryMessage ?? '等待检测'}
               </dd>
+            </div>
+            <div>
+              <dt>采集端点</dt>
+              <dd className={status?.collectorReady ? 'ok-text' : 'warning-text'}>
+                {status?.collectorMessage ?? '等待启动'}
+              </dd>
+            </div>
+            <div>
+              <dt>已采集事件</dt>
+              <dd>{status ? `${status.receivedPromptEvents} 条` : '0 条'}</dd>
+            </div>
+            <div>
+              <dt>spool 导入</dt>
+              <dd>{status ? `${status.importedSpoolEvents} 条` : '0 条'}</dd>
             </div>
           </dl>
           {status?.startupErrors.length ? (

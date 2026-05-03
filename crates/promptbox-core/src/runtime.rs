@@ -36,6 +36,10 @@ pub struct AppStatus {
     pub config_ready: bool,
     pub hook_binary_ready: bool,
     pub hook_binary_message: String,
+    pub collector_ready: bool,
+    pub collector_message: String,
+    pub imported_spool_events: usize,
+    pub received_prompt_events: usize,
     pub startup_errors: Vec<String>,
 }
 
@@ -290,6 +294,10 @@ impl RuntimeState {
             config_ready: true,
             hook_binary_ready: self.hook_binary.ready,
             hook_binary_message: self.hook_binary.message.clone(),
+            collector_ready: false,
+            collector_message: "本地采集端点尚未启动".to_string(),
+            imported_spool_events: 0,
+            received_prompt_events: 0,
             startup_errors: self.startup_errors.clone(),
         }
     }
@@ -317,6 +325,10 @@ pub fn app_status_from_error(error: String) -> AppStatus {
         config_ready: false,
         hook_binary_ready: false,
         hook_binary_message: "运行时初始化失败".to_string(),
+        collector_ready: false,
+        collector_message: "本地采集端点未启动".to_string(),
+        imported_spool_events: 0,
+        received_prompt_events: 0,
         startup_errors: vec![error],
     }
 }
