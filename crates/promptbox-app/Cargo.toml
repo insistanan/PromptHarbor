@@ -1,0 +1,19 @@
+[package]
+name = "promptbox-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "PromptHarbor desktop application"
+default-run = "promptbox-app"
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+promptbox-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+tauri-plugin-positioner.workspace = true

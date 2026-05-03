@@ -1,0 +1,12 @@
+{
+  "name": "promptharbor",
+  "private": true,
+  "version": "0.1.0",
+  "description": "提示港 PromptHarbor 本地提示词工作台",
+  "scripts": {
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "app:dev": "npm --prefix frontend run tauri:dev",
+    "app:build": "npm --prefix frontend run tauri:build"
+  }
+}

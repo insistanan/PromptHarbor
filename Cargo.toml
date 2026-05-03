@@ -1,0 +1,22 @@
+[workspace]
+members = [
+    "crates/promptbox-app",
+    "crates/promptbox-core",
+    "crates/promptbox-hook",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/insistanan/PromptHarbor"
+authors = ["insistanan"]
+
+[workspace.dependencies]
+promptbox-core = { path = "crates/promptbox-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
+tauri-plugin-positioner = "2"

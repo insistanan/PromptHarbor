@@ -1,0 +1,87 @@
+# 提示港 PromptHarbor
+
+提示港是一个面向 Claude Code 和 Codex CLI 的本地提示词工作台。它帮助用户为每个 Agent 会话编写 Markdown 草稿、复制到对应 Agent 客户端中提交，并通过 hooks 记录用户实际发送的 prompt，支持历史回看与搜索。
+
+## 项目状态
+
+当前已进入 MVP 实现阶段，仓库包含 Tauri + React + Rust workspace 的初始骨架。
+
+已确认的 MVP 目标：
+
+- 同时支持 Claude Code 和 Codex CLI。
+- 只记录用户 prompt，不记录模型回复。
+- 使用 `UserPromptSubmit` hook 捕获用户实际提交内容。
+- 使用 Milkdown 提供 Typora-like Markdown 草稿编辑体验。
+- 使用 Tauri + Rust + SQLite 构建本地桌面应用。
+- 默认本地优先、不联网、不调用外部大模型 API。
+- 支持全局暂停记录。
+- 支持系统托盘常驻。
+
+## 开发启动
+
+当前骨架包含：
+
+- `crates/promptbox-core`：共享领域类型和应用状态。
+- `crates/promptbox-hook`：hook 可执行文件骨架，已支持 `--version`。
+- `crates/promptbox-app`：Tauri 应用骨架，提供最小 `app_status` IPC command。
+- `frontend`：React + Vite 前端骨架。
+
+安装前端依赖：
+
+```powershell
+npm --prefix frontend install
+```
+
+启动 Tauri 开发模式：
+
+```powershell
+npm --prefix frontend run tauri:dev
+```
+
+仅启动前端开发服务器：
+
+```powershell
+npm --prefix frontend run dev
+```
+
+当前环境尚未运行安装、编译或测试；以上命令作为项目启动入口保留。
+
+## 核心概念
+
+- **Agent 客户端**：Claude Code 或 Codex CLI。
+- **Agent 会话**：由 `Agent 客户端 + session_id` 唯一标识的一次可 resume 对话。
+- **会话工作区**：PromptHarbor 中绑定到某个活动 Agent 会话的编辑界面。
+- **当前草稿**：绑定到 Agent 会话的未发送 Markdown prompt。
+- **已发送 prompt**：由 Agent 客户端 hook 捕获到的用户真实提交内容。
+
+完整领域术语见 [CONTEXT.md](CONTEXT.md)。
+
+## 设计文档
+
+- [MVP 方案设计](docs/promptbox-design.md)
+- [代码规范索引](docs/code-style/README.md)
+- [ADR 0001：默认本地优先且不联网](docs/adr/0001-local-first-and-no-network-by-default.md)
+- [ADR 0002：MVP 优先验证本地提示词工作流](docs/adr/0002-mvp-validates-the-local-prompt-workflow.md)
+- [ADR 0003：hook 采集优先保护隐私而不是完整捕获](docs/adr/0003-hook-privacy-before-capture-completeness.md)
+
+## 计划技术栈
+
+- Rust
+- Tauri
+- React
+- Milkdown
+- SQLite
+
+## 隐私边界
+
+PromptHarbor 默认只在本机保存数据：
+
+- 不上传 prompt。
+- 不记录模型回复。
+- 不自动读取 Claude Code 或 Codex CLI 原始会话文件。
+- 不默认调用外部大模型 API。
+- 暂停记录开启时，hook 采集器不会读取 stdin。
+
+## License
+
+本项目使用 MIT 协议，见 [LICENSE](LICENSE)。
