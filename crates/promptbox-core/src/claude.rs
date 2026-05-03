@@ -32,7 +32,9 @@ pub fn detect_claude_user_hook(hook_path: &Path) -> Result<ClaudeHookStatus, Str
     }
 
     let root = read_settings_json(&settings_path)?;
-    let installed = has_promptbox_claude_hook(&root);
+    let has_current = has_promptbox_claude_hook(&root, &expected_command);
+    let has_stale = has_stale_promptbox_claude_hook(&root, &expected_command);
+    let installed = has_current && !has_stale;
 
     Ok(ClaudeHookStatus {
         settings_path: path_to_string(&settings_path),
@@ -41,6 +43,8 @@ pub fn detect_claude_user_hook(hook_path: &Path) -> Result<ClaudeHookStatus, Str
         readable: true,
         message: if installed {
             "Claude Code 用户级 hook 已安装".to_string()
+        } else if has_current || has_stale {
+            "Claude Code 用户级 hook 路径与当前 PromptBox home 不一致，请重新安装".to_string()
         } else {
             "Claude Code 用户级 hook 未安装".to_string()
         },
@@ -138,12 +142,21 @@ fn ensure_claude_hook_value(root: &mut Value, expected_command: &str) -> Result<
         .as_array_mut()
         .ok_or_else(|| "Claude Code UserPromptSubmit hooks 不是 JSON array".to_string())?;
 
-    if user_prompt_submit_array
+    let has_current = user_prompt_submit_array
         .iter()
-        .any(has_promptbox_claude_hook)
-    {
+        .any(|value| has_promptbox_claude_hook(value, expected_command));
+    let has_stale = user_prompt_submit_array
+        .iter()
+        .any(|value| has_stale_promptbox_claude_hook(value, expected_command));
+
+    if has_current && !has_stale {
         return Ok(());
     }
+
+    for value in user_prompt_submit_array.iter_mut() {
+        remove_promptbox_claude_hooks(value);
+    }
+    user_prompt_submit_array.retain(|value| !empty_hook_entry(value));
 
     user_prompt_submit_array.push(json!({
         "hooks": [
@@ -157,18 +170,81 @@ fn ensure_claude_hook_value(root: &mut Value, expected_command: &str) -> Result<
     Ok(())
 }
 
-fn has_promptbox_claude_hook(root: &Value) -> bool {
+fn has_promptbox_claude_hook(root: &Value, expected_command: &str) -> bool {
     match root {
-        Value::String(value) => command_matches_promptbox_claude(value),
-        Value::Array(items) => items.iter().any(has_promptbox_claude_hook),
-        Value::Object(object) => object.values().any(has_promptbox_claude_hook),
+        Value::String(value) => command_matches_expected_promptbox_claude(value, expected_command),
+        Value::Array(items) => items
+            .iter()
+            .any(|value| has_promptbox_claude_hook(value, expected_command)),
+        Value::Object(object) => object
+            .values()
+            .any(|value| has_promptbox_claude_hook(value, expected_command)),
         _ => false,
     }
+}
+
+fn has_stale_promptbox_claude_hook(root: &Value, expected_command: &str) -> bool {
+    match root {
+        Value::String(value) => {
+            command_matches_promptbox_claude(value)
+                && !command_matches_expected_promptbox_claude(value, expected_command)
+        }
+        Value::Array(items) => items
+            .iter()
+            .any(|value| has_stale_promptbox_claude_hook(value, expected_command)),
+        Value::Object(object) => object
+            .values()
+            .any(|value| has_stale_promptbox_claude_hook(value, expected_command)),
+        _ => false,
+    }
+}
+
+fn remove_promptbox_claude_hooks(root: &mut Value) {
+    match root {
+        Value::Array(items) => {
+            for value in items.iter_mut() {
+                remove_promptbox_claude_hooks(value);
+            }
+            items.retain(|value| {
+                !is_promptbox_claude_command_hook(value) && !empty_hook_entry(value)
+            });
+        }
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                remove_promptbox_claude_hooks(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_promptbox_claude_command_hook(value: &Value) -> bool {
+    value
+        .as_object()
+        .and_then(|object| object.get("command"))
+        .and_then(Value::as_str)
+        .is_some_and(command_matches_promptbox_claude)
+}
+
+fn empty_hook_entry(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+
+    object.len() == 1
+        && object
+            .get("hooks")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
 }
 
 fn command_matches_promptbox_claude(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
     lower.contains("promptbox-hook") && lower.contains("--provider") && lower.contains("claude")
+}
+
+fn command_matches_expected_promptbox_claude(command: &str, expected_command: &str) -> bool {
+    command.trim().eq_ignore_ascii_case(expected_command.trim())
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -222,6 +298,54 @@ mod tests {
         assert!(updated.contains("echo existing"));
         assert!(updated.contains("promptbox-hook.exe"));
         assert!(updated.contains("--provider claude"));
+    }
+
+    #[test]
+    fn stale_promptbox_hook_path_is_replaced() {
+        let home = isolated_home("claude-stale-hook");
+        let settings_dir = home.join(".claude");
+        fs::create_dir_all(&settings_dir).unwrap();
+        let settings_path = settings_dir.join("settings.json");
+        let old_hook_path = home.join("old").join("bin").join("promptbox-hook.exe");
+        let current_hook_path = home
+            .join("PromptBox")
+            .join("bin")
+            .join("promptbox-hook.exe");
+        let stale_command = claude_hook_command(&old_hook_path);
+        let current_command = claude_hook_command(&current_hook_path);
+        let root = json!({
+            "hooks": {
+                "UserPromptSubmit": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": stale_command
+                            },
+                            {
+                                "type": "command",
+                                "command": "echo existing"
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+        write_settings_json(&settings_path, &root).unwrap();
+        env::set_var("USERPROFILE", &home);
+
+        let detected = detect_claude_user_hook(&current_hook_path).unwrap();
+        assert!(!detected.installed);
+        assert!(detected.message.contains("不一致"));
+
+        install_claude_user_hook(&current_hook_path).unwrap();
+        let updated = read_settings_json(&settings_path).unwrap();
+
+        assert!(has_promptbox_claude_hook(&updated, &current_command));
+        assert!(!has_stale_promptbox_claude_hook(&updated, &current_command));
+        assert!(serde_json::to_string(&updated)
+            .unwrap()
+            .contains("echo existing"));
     }
 
     fn isolated_home(name: &str) -> PathBuf {

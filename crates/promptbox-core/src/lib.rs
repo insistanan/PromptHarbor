@@ -16,7 +16,9 @@ pub use runtime::{
     HookBinaryStatus, PromptBoxConfig, PromptBoxPaths, RuntimeState, APP_DISPLAY_NAME, APP_NAME,
     DEFAULT_LOCAL_ENDPOINT, HOOK_PROTOCOL_VERSION,
 };
-pub use store::{PromptStore, RecordOutcome, StoreSummary};
+pub use store::{
+    ArchiveSessionOutcome, PromptStore, RecordOutcome, SessionList, SessionListItem, StoreSummary,
+};
 
 pub fn initialize_runtime() -> Result<RuntimeState, String> {
     RuntimeState::initialize()

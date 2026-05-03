@@ -1,8 +1,9 @@
 use crate::{current_captured_at, PromptEvent};
+use chrono::{Duration, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct PromptStore {
@@ -32,6 +33,24 @@ impl PromptStore {
         store_summary(&connection)
     }
 
+    pub fn list_sessions(&self, maybe_closed_after_hours: u64) -> Result<SessionList, String> {
+        let connection = self.open_connection()?;
+        migrate(&connection)?;
+        update_maybe_closed_sessions(&connection, maybe_closed_after_hours)?;
+        list_sessions(&connection)
+    }
+
+    pub fn archive_session(
+        &self,
+        provider: &str,
+        session_id: &str,
+        force: bool,
+    ) -> Result<ArchiveSessionOutcome, String> {
+        let connection = self.open_connection()?;
+        migrate(&connection)?;
+        archive_session(&connection, provider, session_id, force)
+    }
+
     fn open_connection(&self) -> Result<Connection, String> {
         Connection::open(&self.database_path).map_err(|error| {
             format!(
@@ -47,6 +66,39 @@ impl PromptStore {
 pub struct StoreSummary {
     pub session_count: usize,
     pub prompt_event_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionList {
+    pub active: Vec<SessionListItem>,
+    pub maybe_closed: Vec<SessionListItem>,
+    pub archived: Vec<SessionListItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionListItem {
+    pub provider: String,
+    pub provider_label: String,
+    pub session_id: String,
+    pub short_session_id: String,
+    pub status: String,
+    pub cwd: Option<String>,
+    pub project_name: String,
+    pub title: String,
+    pub last_hook_at: Option<String>,
+    pub updated_at: String,
+    pub prompt_count: usize,
+    pub has_non_empty_draft: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveSessionOutcome {
+    pub archived: bool,
+    pub requires_confirmation: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,6 +148,18 @@ fn migrate(connection: &Connection) -> Result<(), String> {
               source text not null default 'hook',
               sent_at text not null,
               created_at text not null
+            );
+
+            create table if not exists drafts (
+              id integer primary key autoincrement,
+              session_db_id integer not null references sessions(id),
+              content_md text not null,
+              content_hash text not null,
+              copy_state text not null default 'idle',
+              copied_at text,
+              last_copied_hash text,
+              updated_at text not null,
+              unique(session_db_id)
             );
 
             create table if not exists raw_hook_events (
@@ -256,6 +320,180 @@ fn store_summary(connection: &Connection) -> Result<StoreSummary, String> {
     })
 }
 
+fn update_maybe_closed_sessions(
+    connection: &Connection,
+    maybe_closed_after_hours: u64,
+) -> Result<(), String> {
+    let threshold = (Utc::now() - Duration::hours(maybe_closed_after_hours as i64))
+        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    let now = current_captured_at();
+
+    connection
+        .execute(
+            r#"
+            update sessions
+            set status = 'maybe_closed',
+                maybe_closed_at = ?1,
+                updated_at = ?1
+            where status = 'active'
+              and last_hook_at is not null
+              and last_hook_at < ?2
+            "#,
+            params![now, threshold],
+        )
+        .map_err(|error| format!("更新可能已关闭 Agent 会话失败：{error}"))?;
+
+    Ok(())
+}
+
+fn list_sessions(connection: &Connection) -> Result<SessionList, String> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            select
+              sessions.provider,
+              sessions.session_id,
+              sessions.status,
+              sessions.cwd,
+              sessions.title,
+              sessions.last_hook_at,
+              sessions.updated_at,
+              count(prompt_events.id) as prompt_count,
+              coalesce(max(case
+                when drafts.content_md is not null and trim(drafts.content_md) != ''
+                then 1 else 0
+              end), 0) as has_non_empty_draft
+            from sessions
+            left join prompt_events on prompt_events.session_db_id = sessions.id
+            left join drafts on drafts.session_db_id = sessions.id
+            group by sessions.id
+            order by sessions.updated_at desc
+            "#,
+        )
+        .map_err(|error| format!("准备读取 Agent 会话列表失败：{error}"))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            let provider: String = row.get(0)?;
+            let session_id: String = row.get(1)?;
+            let status: String = row.get(2)?;
+            let cwd: Option<String> = row.get(3)?;
+            let title: Option<String> = row.get(4)?;
+            let last_hook_at: Option<String> = row.get(5)?;
+            let updated_at: String = row.get(6)?;
+            let prompt_count: i64 = row.get(7)?;
+            let has_non_empty_draft: i64 = row.get(8)?;
+
+            Ok(SessionListItem {
+                provider_label: provider_label(&provider).to_string(),
+                short_session_id: short_session_id(&session_id),
+                project_name: cwd
+                    .as_deref()
+                    .map(project_name_from_cwd)
+                    .unwrap_or_else(|| "未知项目".to_string()),
+                title: title.unwrap_or_else(|| short_session_title(&session_id)),
+                provider,
+                session_id,
+                status,
+                cwd,
+                last_hook_at,
+                updated_at,
+                prompt_count: prompt_count as usize,
+                has_non_empty_draft: has_non_empty_draft > 0,
+            })
+        })
+        .map_err(|error| format!("读取 Agent 会话列表失败：{error}"))?;
+
+    let mut sessions = SessionList {
+        active: Vec::new(),
+        maybe_closed: Vec::new(),
+        archived: Vec::new(),
+    };
+
+    for row in rows {
+        let session = row.map_err(|error| format!("解析 Agent 会话列表失败：{error}"))?;
+        match session.status.as_str() {
+            "active" => sessions.active.push(session),
+            "maybe_closed" => sessions.maybe_closed.push(session),
+            "archived" => sessions.archived.push(session),
+            _ => sessions.maybe_closed.push(session),
+        }
+    }
+
+    Ok(sessions)
+}
+
+fn archive_session(
+    connection: &Connection,
+    provider: &str,
+    session_id: &str,
+    force: bool,
+) -> Result<ArchiveSessionOutcome, String> {
+    let session_db_id = session_db_id(connection, provider, session_id)?;
+    let status = connection
+        .query_row(
+            "select status from sessions where id = ?1",
+            params![session_db_id],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| format!("读取 Agent 会话状态失败：{error}"))?;
+
+    if status == "archived" {
+        return Ok(ArchiveSessionOutcome {
+            archived: true,
+            requires_confirmation: false,
+            message: "Agent 会话已经是历史状态".to_string(),
+        });
+    }
+
+    if status != "active" && status != "maybe_closed" {
+        return Err(format!("不支持归档当前状态的 Agent 会话：{status}"));
+    }
+
+    let has_non_empty_draft = session_has_non_empty_draft(connection, session_db_id)?;
+    if has_non_empty_draft && !force {
+        return Ok(ArchiveSessionOutcome {
+            archived: false,
+            requires_confirmation: true,
+            message: "该 Agent 会话有非空当前草稿，归档前需要确认".to_string(),
+        });
+    }
+
+    let now = current_captured_at();
+    connection
+        .execute(
+            r#"
+            update sessions
+            set status = 'archived',
+                archived_at = ?1,
+                updated_at = ?1
+            where id = ?2
+            "#,
+            params![now, session_db_id],
+        )
+        .map_err(|error| format!("归档 Agent 会话失败：{error}"))?;
+
+    Ok(ArchiveSessionOutcome {
+        archived: true,
+        requires_confirmation: false,
+        message: "Agent 会话已归档为历史".to_string(),
+    })
+}
+
+fn session_has_non_empty_draft(
+    connection: &Connection,
+    session_db_id: i64,
+) -> Result<bool, String> {
+    connection
+        .query_row(
+            "select exists(select 1 from drafts where session_db_id = ?1 and trim(content_md) != '')",
+            params![session_db_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|exists| exists != 0)
+        .map_err(|error| format!("检查当前草稿失败：{error}"))
+}
+
 fn count_table(connection: &Connection, table: &str) -> Result<usize, String> {
     let sql = format!("select count(*) from {table}");
     connection
@@ -316,6 +554,27 @@ fn short_session_title(session_id: &str) -> String {
     } else {
         format!("会话 {short}")
     }
+}
+
+fn short_session_id(session_id: &str) -> String {
+    session_id.chars().take(8).collect::<String>()
+}
+
+fn provider_label(provider: &str) -> &'static str {
+    match provider {
+        "claude" => "Claude Code",
+        "codex" => "Codex CLI",
+        _ => "未知 Agent",
+    }
+}
+
+fn project_name_from_cwd(cwd: &str) -> String {
+    Path::new(cwd)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(cwd)
+        .to_string()
 }
 
 #[cfg(test)]
@@ -394,6 +653,101 @@ mod tests {
             second.ignored_reason.as_deref(),
             Some("重复 turn_id，已忽略")
         );
+    }
+
+    #[test]
+    fn moves_inactive_sessions_to_maybe_closed_without_archiving() {
+        let home = isolated_home("maybe-closed-store");
+        let store = PromptStore::new(home.join("promptbox.sqlite"));
+        store.initialize().unwrap();
+        let event = test_event("claude", "old-session", "old prompt");
+        store.record_prompt_event(&event).unwrap();
+
+        let connection = store.open_connection().unwrap();
+        connection
+            .execute(
+                "update sessions set last_hook_at = '2026-05-01T00:00:00.000Z', updated_at = '2026-05-01T00:00:00.000Z'",
+                [],
+            )
+            .unwrap();
+
+        let sessions = store.list_sessions(12).unwrap();
+        assert_eq!(sessions.active.len(), 0);
+        assert_eq!(sessions.maybe_closed.len(), 1);
+        assert_eq!(sessions.archived.len(), 0);
+    }
+
+    #[test]
+    fn archive_requires_confirmation_for_non_empty_draft_then_succeeds() {
+        let home = isolated_home("archive-store");
+        let store = PromptStore::new(home.join("promptbox.sqlite"));
+        store.initialize().unwrap();
+        let event = test_event("claude", "draft-session", "draft prompt");
+        store.record_prompt_event(&event).unwrap();
+
+        let connection = store.open_connection().unwrap();
+        let session_db_id = session_db_id(&connection, "claude", "draft-session").unwrap();
+        connection
+            .execute(
+                "insert into drafts (session_db_id, content_md, content_hash, updated_at) values (?1, 'draft text', 'hash', ?2)",
+                params![session_db_id, current_captured_at()],
+            )
+            .unwrap();
+
+        let blocked = store
+            .archive_session("claude", "draft-session", false)
+            .unwrap();
+        let archived = store
+            .archive_session("claude", "draft-session", true)
+            .unwrap();
+        let sessions = store.list_sessions(12).unwrap();
+
+        assert!(!blocked.archived);
+        assert!(blocked.requires_confirmation);
+        assert!(archived.archived);
+        assert_eq!(sessions.archived.len(), 1);
+    }
+
+    #[test]
+    fn archived_session_returns_to_active_after_new_prompt() {
+        let home = isolated_home("reactivate-store");
+        let store = PromptStore::new(home.join("promptbox.sqlite"));
+        store.initialize().unwrap();
+        let first = test_event("claude", "archive-session", "first prompt");
+        store.record_prompt_event(&first).unwrap();
+        store
+            .archive_session("claude", "archive-session", true)
+            .unwrap();
+
+        let second = PromptEvent {
+            prompt: Some("second prompt".to_string()),
+            captured_at: "2026-05-03T13:00:00.000Z".to_string(),
+            ..test_event("claude", "archive-session", "second prompt")
+        };
+        store.record_prompt_event(&second).unwrap();
+        let sessions = store.list_sessions(12).unwrap();
+
+        assert_eq!(sessions.active.len(), 1);
+        assert_eq!(sessions.archived.len(), 0);
+    }
+
+    fn test_event(provider: &str, session_id: &str, prompt: &str) -> PromptEvent {
+        PromptEvent {
+            provider: Provider::parse(provider).unwrap(),
+            event_name: "UserPromptSubmit".to_string(),
+            session_id: session_id.to_string(),
+            turn_id: None,
+            cwd: Some("D:\\code\\some\\prompt".to_string()),
+            transcript_path: None,
+            model: None,
+            prompt: Some(prompt.to_string()),
+            captured_at: "2026-05-03T12:00:00.000Z".to_string(),
+            raw_json: json!({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": session_id,
+                "prompt": prompt
+            }),
+        }
     }
 
     fn isolated_home(name: &str) -> PathBuf {

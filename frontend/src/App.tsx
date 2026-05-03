@@ -54,6 +54,33 @@ type CodexHookStatus = {
   configBackupPath: string | null;
 };
 
+type SessionListItem = {
+  provider: string;
+  providerLabel: string;
+  sessionId: string;
+  shortSessionId: string;
+  status: string;
+  cwd: string | null;
+  projectName: string;
+  title: string;
+  lastHookAt: string | null;
+  updatedAt: string;
+  promptCount: number;
+  hasNonEmptyDraft: boolean;
+};
+
+type SessionList = {
+  active: SessionListItem[];
+  maybeClosed: SessionListItem[];
+  archived: SessionListItem[];
+};
+
+type ArchiveSessionOutcome = {
+  archived: boolean;
+  requiresConfirmation: boolean;
+  message: string;
+};
+
 const menuItems = [
   { label: '会话', active: true },
   { label: '草稿', active: false },
@@ -63,6 +90,12 @@ const menuItems = [
 
 export function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
+  const [sessions, setSessions] = useState<SessionList>({
+    active: [],
+    maybeClosed: [],
+    archived: [],
+  });
+  const [selectedSession, setSelectedSession] = useState<SessionListItem | null>(null);
   const [claudeStatus, setClaudeStatus] = useState<ClaudeHookStatus | null>(null);
   const [codexStatus, setCodexStatus] = useState<CodexHookStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -85,8 +118,29 @@ export function App() {
           }
         });
     };
+    const loadSessions = () => {
+      invoke<SessionList>('list_sessions')
+        .then((nextSessions) => {
+          if (!disposed) {
+            setSessions(nextSessions);
+            setSelectedSession((current) => {
+              if (!current) {
+                return nextSessions.active[0] ?? nextSessions.maybeClosed[0] ?? null;
+              }
+
+              return findSession(nextSessions, current.provider, current.sessionId);
+            });
+          }
+        })
+        .catch((reason) => {
+          if (!disposed) {
+            setError(String(reason));
+          }
+        });
+    };
 
     loadStatus();
+    loadSessions();
     const loadClaudeStatus = () => {
       invoke<ClaudeHookStatus>('claude_hook_status')
         .then((nextStatus) => {
@@ -116,7 +170,10 @@ export function App() {
 
     loadClaudeStatus();
     loadCodexStatus();
-    const timer = window.setInterval(loadStatus, 1000);
+    const timer = window.setInterval(() => {
+      loadStatus();
+      loadSessions();
+    }, 1000);
     return () => {
       disposed = true;
       window.clearInterval(timer);
@@ -143,11 +200,45 @@ export function App() {
       .catch((reason) => setError(String(reason)))
       .finally(() => setInstallingCodex(false));
   };
-  const sessionGroups = [
-    { label: '活动', count: status?.sessionCount ?? 0, detail: '真实提交 prompt 后出现' },
-    { label: '可能已关闭', count: 0, detail: '超过阈值未收到 hook' },
-    { label: '历史', count: 0, detail: '只回看和复制' },
-  ];
+  const archiveSelectedSession = () => {
+    if (!selectedSession || selectedSession.status === 'archived') {
+      return;
+    }
+
+    archiveSession(selectedSession, false).then((outcome) => {
+      if (outcome.requiresConfirmation) {
+        const confirmed = window.confirm(outcome.message);
+        if (confirmed) {
+          archiveSession(selectedSession, true);
+        }
+      }
+    });
+  };
+  const archiveSession = (session: SessionListItem, force: boolean) =>
+    invoke<ArchiveSessionOutcome>('archive_session', {
+      provider: session.provider,
+      sessionId: session.sessionId,
+      force,
+    })
+      .then((outcome) => {
+        if (outcome.archived) {
+          return invoke<SessionList>('list_sessions').then((nextSessions) => {
+            setSessions(nextSessions);
+            setSelectedSession(findSession(nextSessions, session.provider, session.sessionId));
+            return outcome;
+          });
+        }
+
+        return outcome;
+      })
+      .catch((reason) => {
+        setError(String(reason));
+        return {
+          archived: false,
+          requiresConfirmation: false,
+          message: String(reason),
+        };
+      });
 
   return (
     <main className="app-shell" aria-label="PromptHarbor 工作区">
@@ -171,17 +262,24 @@ export function App() {
             <span>Agent 会话</span>
             <strong>{status?.sessionCount ?? 0}</strong>
           </div>
-          <div className="session-groups">
-            {sessionGroups.map((item) => (
-              <button className="session-group" key={item.label}>
-                <span>
-                  <strong>{item.label}</strong>
-                  <small>{item.detail}</small>
-                </span>
-                <em>{item.count}</em>
-              </button>
-            ))}
-          </div>
+          <SessionGroup
+            items={sessions.active}
+            label="活动"
+            onSelect={setSelectedSession}
+            selected={selectedSession}
+          />
+          <SessionGroup
+            items={sessions.maybeClosed}
+            label="可能已关闭"
+            onSelect={setSelectedSession}
+            selected={selectedSession}
+          />
+          <SessionGroup
+            items={sessions.archived}
+            label="历史"
+            onSelect={setSelectedSession}
+            selected={selectedSession}
+          />
         </section>
       </aside>
 
@@ -189,7 +287,7 @@ export function App() {
         <header className="detail-header">
           <div>
             <p className="eyebrow">会话工作区</p>
-            <h2>选择一个活动 Agent 会话</h2>
+            <h2>{selectedSession?.title ?? '选择一个活动 Agent 会话'}</h2>
           </div>
           <div className="status-strip" aria-label="应用状态">
             <span>{status?.version ? `v${status.version}` : '版本读取中'}</span>
@@ -366,12 +464,53 @@ export function App() {
         <section className="prompt-history" aria-label="prompt 历史">
           <div className="section-heading">
             <h3>prompt 历史</h3>
-            <span>hook-first</span>
+            <span>{selectedSession ? selectedSession.providerLabel : 'hook-first'}</span>
           </div>
-          <div className="empty-state">
-            <p className="empty-title">等待第一条已发送 prompt</p>
-            <p>只记录用户真实提交的 prompt，模型回复不会进入 PromptHarbor。</p>
-          </div>
+          {selectedSession ? (
+            <div className="session-detail">
+              <dl className="runtime-list">
+                <div>
+                  <dt>Agent 客户端</dt>
+                  <dd>{selectedSession.providerLabel}</dd>
+                </div>
+                <div>
+                  <dt>session ID</dt>
+                  <dd>{selectedSession.shortSessionId}</dd>
+                </div>
+                <div>
+                  <dt>项目</dt>
+                  <dd>{selectedSession.projectName}</dd>
+                </div>
+                <div>
+                  <dt>状态</dt>
+                  <dd>{sessionStatusLabel(selectedSession.status)}</dd>
+                </div>
+                <div>
+                  <dt>最近 hook</dt>
+                  <dd>{formatDateTime(selectedSession.lastHookAt)}</dd>
+                </div>
+                <div>
+                  <dt>已发送 prompt</dt>
+                  <dd>{selectedSession.promptCount} 条</dd>
+                </div>
+              </dl>
+              <div className="wizard-actions">
+                <button
+                  className="secondary-action"
+                  disabled={selectedSession.status === 'archived'}
+                  onClick={archiveSelectedSession}
+                  type="button"
+                >
+                  归档
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="empty-state">
+              <p className="empty-title">等待第一条已发送 prompt</p>
+              <p>只记录用户真实提交的 prompt，模型回复不会进入 PromptHarbor。</p>
+            </div>
+          )}
         </section>
 
         <section className="draft-panel" aria-label="当前草稿">
@@ -390,4 +529,90 @@ export function App() {
       </section>
     </main>
   );
+}
+
+function SessionGroup({
+  items,
+  label,
+  onSelect,
+  selected,
+}: {
+  items: SessionListItem[];
+  label: string;
+  onSelect: (session: SessionListItem) => void;
+  selected: SessionListItem | null;
+}) {
+  return (
+    <section className="session-group-block" aria-label={`${label} Agent 会话`}>
+      <div className="session-group-heading">
+        <span>{label}</span>
+        <em>{items.length}</em>
+      </div>
+      {items.length ? (
+        <div className="session-groups">
+          {items.map((session) => {
+            const active =
+              selected?.provider === session.provider && selected?.sessionId === session.sessionId;
+            return (
+              <button
+                className={active ? 'session-group active' : 'session-group'}
+                key={`${session.provider}:${session.sessionId}`}
+                onClick={() => onSelect(session)}
+                type="button"
+              >
+                <span>
+                  <strong>{session.title}</strong>
+                  <small>
+                    {session.providerLabel} · {session.shortSessionId} · {session.projectName}
+                  </small>
+                  <small>{formatDateTime(session.updatedAt)}</small>
+                </span>
+                <em>{session.promptCount}</em>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="session-empty">暂无</p>
+      )}
+    </section>
+  );
+}
+
+function findSession(
+  sessions: SessionList,
+  provider: string,
+  sessionId: string,
+): SessionListItem | null {
+  return (
+    [...sessions.active, ...sessions.maybeClosed, ...sessions.archived].find(
+      (session) => session.provider === provider && session.sessionId === sessionId,
+    ) ?? null
+  );
+}
+
+function sessionStatusLabel(status: string) {
+  if (status === 'active') {
+    return '活动';
+  }
+  if (status === 'maybe_closed') {
+    return '可能已关闭';
+  }
+  if (status === 'archived') {
+    return '历史';
+  }
+  return status;
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) {
+    return '暂无';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString();
 }

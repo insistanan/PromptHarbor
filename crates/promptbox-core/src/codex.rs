@@ -24,7 +24,8 @@ pub fn detect_codex_user_hook(hook_path: &Path) -> Result<CodexHookStatus, Strin
     let expected_command = codex_hook_command(hook_path);
     let hook_installed = if paths.hooks_path.exists() {
         let root = read_json(&paths.hooks_path)?;
-        has_promptbox_codex_hook(&root)
+        has_promptbox_codex_hook(&root, &expected_command)
+            && !has_stale_promptbox_codex_hook(&root, &expected_command)
     } else {
         false
     };
@@ -196,12 +197,21 @@ fn ensure_codex_hook_value(root: &mut Value, expected_command: &str) -> Result<(
         .as_array_mut()
         .ok_or_else(|| "Codex CLI UserPromptSubmit hooks 不是 JSON array".to_string())?;
 
-    if user_prompt_submit_array
+    let has_current = user_prompt_submit_array
         .iter()
-        .any(has_promptbox_codex_hook)
-    {
+        .any(|value| has_promptbox_codex_hook(value, expected_command));
+    let has_stale = user_prompt_submit_array
+        .iter()
+        .any(|value| has_stale_promptbox_codex_hook(value, expected_command));
+
+    if has_current && !has_stale {
         return Ok(());
     }
+
+    for value in user_prompt_submit_array.iter_mut() {
+        remove_promptbox_codex_hooks(value);
+    }
+    user_prompt_submit_array.retain(|value| !empty_hook_entry(value));
 
     user_prompt_submit_array.push(json!({
         "hooks": [
@@ -236,18 +246,81 @@ fn codex_hooks_enabled(root: &toml::Value) -> bool {
         .unwrap_or(false)
 }
 
-fn has_promptbox_codex_hook(root: &Value) -> bool {
+fn has_promptbox_codex_hook(root: &Value, expected_command: &str) -> bool {
     match root {
-        Value::String(value) => command_matches_promptbox_codex(value),
-        Value::Array(items) => items.iter().any(has_promptbox_codex_hook),
-        Value::Object(object) => object.values().any(has_promptbox_codex_hook),
+        Value::String(value) => command_matches_expected_promptbox_codex(value, expected_command),
+        Value::Array(items) => items
+            .iter()
+            .any(|value| has_promptbox_codex_hook(value, expected_command)),
+        Value::Object(object) => object
+            .values()
+            .any(|value| has_promptbox_codex_hook(value, expected_command)),
         _ => false,
     }
+}
+
+fn has_stale_promptbox_codex_hook(root: &Value, expected_command: &str) -> bool {
+    match root {
+        Value::String(value) => {
+            command_matches_promptbox_codex(value)
+                && !command_matches_expected_promptbox_codex(value, expected_command)
+        }
+        Value::Array(items) => items
+            .iter()
+            .any(|value| has_stale_promptbox_codex_hook(value, expected_command)),
+        Value::Object(object) => object
+            .values()
+            .any(|value| has_stale_promptbox_codex_hook(value, expected_command)),
+        _ => false,
+    }
+}
+
+fn remove_promptbox_codex_hooks(root: &mut Value) {
+    match root {
+        Value::Array(items) => {
+            for value in items.iter_mut() {
+                remove_promptbox_codex_hooks(value);
+            }
+            items.retain(|value| {
+                !is_promptbox_codex_command_hook(value) && !empty_hook_entry(value)
+            });
+        }
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                remove_promptbox_codex_hooks(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_promptbox_codex_command_hook(value: &Value) -> bool {
+    value
+        .as_object()
+        .and_then(|object| object.get("command"))
+        .and_then(Value::as_str)
+        .is_some_and(command_matches_promptbox_codex)
+}
+
+fn empty_hook_entry(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+
+    object.len() == 1
+        && object
+            .get("hooks")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
 }
 
 fn command_matches_promptbox_codex(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
     lower.contains("promptbox-hook") && lower.contains("--provider") && lower.contains("codex")
+}
+
+fn command_matches_expected_promptbox_codex(command: &str, expected_command: &str) -> bool {
+    command.trim().eq_ignore_ascii_case(expected_command.trim())
 }
 
 fn codex_status_message(hook_installed: bool, codex_hooks_enabled: bool) -> String {
@@ -319,6 +392,56 @@ mod tests {
         assert!(config.contains("model = \"gpt-test\""));
         assert!(config.contains("other = true"));
         assert!(config.contains("codex_hooks = true"));
+    }
+
+    #[test]
+    fn stale_promptbox_hook_path_is_replaced() {
+        let home = isolated_home("codex-stale-hook");
+        let codex_dir = home.join(".codex");
+        fs::create_dir_all(&codex_dir).unwrap();
+        let hooks_path = codex_dir.join("hooks.json");
+        let config_path = codex_dir.join("config.toml");
+        let old_hook_path = home.join("old").join("bin").join("promptbox-hook.exe");
+        let current_hook_path = home
+            .join("PromptBox")
+            .join("bin")
+            .join("promptbox-hook.exe");
+        let stale_command = codex_hook_command(&old_hook_path);
+        let current_command = codex_hook_command(&current_hook_path);
+        let root = json!({
+            "hooks": {
+                "UserPromptSubmit": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": stale_command
+                            },
+                            {
+                                "type": "command",
+                                "command": "echo existing"
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+        write_json(&hooks_path, &root).unwrap();
+        fs::write(&config_path, "[features]\ncodex_hooks = true\n").unwrap();
+        env::set_var("USERPROFILE", &home);
+
+        let detected = detect_codex_user_hook(&current_hook_path).unwrap();
+        assert!(!detected.hook_installed);
+        assert!(!detected.ready);
+
+        install_codex_user_hook(&current_hook_path).unwrap();
+        let updated = read_json(&hooks_path).unwrap();
+
+        assert!(has_promptbox_codex_hook(&updated, &current_command));
+        assert!(!has_stale_promptbox_codex_hook(&updated, &current_command));
+        assert!(serde_json::to_string(&updated)
+            .unwrap()
+            .contains("echo existing"));
     }
 
     fn isolated_home(name: &str) -> PathBuf {

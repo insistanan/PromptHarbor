@@ -1,6 +1,7 @@
 use promptbox_core::{
-    clear_spool_events, parse_local_endpoint, read_spool_events, AppStatus, ClaudeHookStatus,
-    CodexHookStatus, PromptEvent, PromptStore, RuntimeState, HOOK_EVENTS_PATH, MAX_HOOK_BODY_BYTES,
+    clear_spool_events, parse_local_endpoint, read_spool_events, AppStatus, ArchiveSessionOutcome,
+    ClaudeHookStatus, CodexHookStatus, PromptEvent, PromptStore, RuntimeState, SessionList,
+    HOOK_EVENTS_PATH, MAX_HOOK_BODY_BYTES,
 };
 use std::{
     io::{Read, Write},
@@ -30,6 +31,8 @@ fn app_status(state: tauri::State<'_, StartupState>) -> AppStatus {
         status.received_prompt_events = events.len();
     }
     if let Some(store) = &state.store {
+        let maybe_closed_after_hours = status.maybe_closed_after_hours;
+        let _ = store.list_sessions(maybe_closed_after_hours);
         if let Ok(summary) = store.summary() {
             status.database_ready = true;
             status.database_message = "数据库就绪".to_string();
@@ -39,6 +42,34 @@ fn app_status(state: tauri::State<'_, StartupState>) -> AppStatus {
     }
 
     status
+}
+
+#[tauri::command]
+fn list_sessions(state: tauri::State<'_, StartupState>) -> Result<SessionList, String> {
+    let maybe_closed_after_hours = state
+        .status
+        .lock()
+        .map(|status| status.maybe_closed_after_hours)
+        .unwrap_or(12);
+    let store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| "数据库尚未初始化".to_string())?;
+    store.list_sessions(maybe_closed_after_hours)
+}
+
+#[tauri::command]
+fn archive_session(
+    state: tauri::State<'_, StartupState>,
+    provider: String,
+    session_id: String,
+    force: bool,
+) -> Result<ArchiveSessionOutcome, String> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| "数据库尚未初始化".to_string())?;
+    store.archive_session(&provider, &session_id, force)
 }
 
 #[tauri::command]
@@ -85,6 +116,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_status,
+            list_sessions,
+            archive_session,
             claude_hook_status,
             install_claude_hook,
             codex_hook_status,
