@@ -1,7 +1,7 @@
 use promptbox_core::{
     clear_spool_events, parse_local_endpoint, read_spool_events, AppStatus, ArchiveSessionOutcome,
-    ClaudeHookStatus, CodexHookStatus, DraftState, PromptEvent, PromptStore, RuntimeState,
-    SessionList, HOOK_EVENTS_PATH, MAX_HOOK_BODY_BYTES,
+    ClaudeHookStatus, CodexHookStatus, DraftState, PromptEvent, PromptHistory, PromptSearchResults,
+    PromptStore, RuntimeState, SessionList, HOOK_EVENTS_PATH, MAX_HOOK_BODY_BYTES,
 };
 use std::{
     io::{Read, Write},
@@ -114,6 +114,33 @@ fn mark_draft_copied(
 }
 
 #[tauri::command]
+fn list_prompt_history(
+    state: tauri::State<'_, StartupState>,
+    provider: String,
+    session_id: String,
+    include_low_info: bool,
+) -> Result<PromptHistory, String> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| "数据库尚未初始化".to_string())?;
+    store.list_prompt_history(&provider, &session_id, include_low_info)
+}
+
+#[tauri::command]
+fn search_prompts(
+    state: tauri::State<'_, StartupState>,
+    query: String,
+    include_low_info: bool,
+) -> Result<PromptSearchResults, String> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| "数据库尚未初始化".to_string())?;
+    store.search_prompts(&query, include_low_info)
+}
+
+#[tauri::command]
 fn claude_hook_status() -> Result<ClaudeHookStatus, String> {
     let paths = promptbox_core::resolve_promptbox_paths()?;
     promptbox_core::detect_claude_user_hook(&paths.hook_binary_path)
@@ -162,6 +189,8 @@ pub fn run() {
             get_draft,
             save_draft,
             mark_draft_copied,
+            list_prompt_history,
+            search_prompts,
             claude_hook_status,
             install_claude_hook,
             codex_hook_status,

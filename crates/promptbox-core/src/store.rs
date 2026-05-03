@@ -79,6 +79,27 @@ impl PromptStore {
         mark_draft_copied(&connection, provider, session_id, content_md)
     }
 
+    pub fn list_prompt_history(
+        &self,
+        provider: &str,
+        session_id: &str,
+        include_low_info: bool,
+    ) -> Result<PromptHistory, String> {
+        let connection = self.open_connection()?;
+        migrate(&connection)?;
+        list_prompt_history(&connection, provider, session_id, include_low_info)
+    }
+
+    pub fn search_prompts(
+        &self,
+        query: &str,
+        include_low_info: bool,
+    ) -> Result<PromptSearchResults, String> {
+        let connection = self.open_connection()?;
+        migrate(&connection)?;
+        search_prompts(&connection, query, include_low_info)
+    }
+
     fn open_connection(&self) -> Result<Connection, String> {
         Connection::open(&self.database_path).map_err(|error| {
             format!(
@@ -150,6 +171,50 @@ pub struct RecordOutcome {
     pub ignored_reason: Option<String>,
     pub session_count: usize,
     pub prompt_event_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptHistory {
+    pub provider: String,
+    pub session_id: String,
+    pub items: Vec<PromptHistoryItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptHistoryItem {
+    pub id: i64,
+    pub prompt_md: String,
+    pub prompt_hash: String,
+    pub is_low_info: bool,
+    pub matched_draft_id: Option<i64>,
+    pub sent_at: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptSearchResults {
+    pub query: String,
+    pub items: Vec<PromptSearchResultItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptSearchResultItem {
+    pub provider: String,
+    pub provider_label: String,
+    pub session_id: String,
+    pub short_session_id: String,
+    pub title: String,
+    pub project_name: String,
+    pub match_kind: String,
+    pub match_label: String,
+    pub snippet: String,
+    pub is_low_info: bool,
+    pub sent_at: Option<String>,
+    pub updated_at: String,
 }
 
 fn migrate(connection: &Connection) -> Result<(), String> {
@@ -672,6 +737,319 @@ fn draft_copy_state(
     }
 }
 
+fn list_prompt_history(
+    connection: &Connection,
+    provider: &str,
+    session_id: &str,
+    include_low_info: bool,
+) -> Result<PromptHistory, String> {
+    let session_db_id = session_db_id(connection, provider, session_id)?;
+    let mut statement = connection
+        .prepare(
+            r#"
+            select id, prompt_md, prompt_hash, is_low_info, matched_draft_id, sent_at, created_at
+            from prompt_events
+            where session_db_id = ?1
+              and (?2 = 1 or is_low_info = 0)
+            order by sent_at desc, id desc
+            "#,
+        )
+        .map_err(|error| format!("准备读取 prompt 历史失败：{error}"))?;
+    let rows = statement
+        .query_map(
+            params![session_db_id, bool_to_i64(include_low_info)],
+            |row| {
+                let is_low_info: i64 = row.get(3)?;
+
+                Ok(PromptHistoryItem {
+                    id: row.get(0)?,
+                    prompt_md: row.get(1)?,
+                    prompt_hash: row.get(2)?,
+                    is_low_info: is_low_info != 0,
+                    matched_draft_id: row.get(4)?,
+                    sent_at: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            },
+        )
+        .map_err(|error| format!("读取 prompt 历史失败：{error}"))?;
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row.map_err(|error| format!("解析 prompt 历史失败：{error}"))?);
+    }
+
+    Ok(PromptHistory {
+        provider: provider.to_string(),
+        session_id: session_id.to_string(),
+        items,
+    })
+}
+
+fn search_prompts(
+    connection: &Connection,
+    query: &str,
+    include_low_info: bool,
+) -> Result<PromptSearchResults, String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(PromptSearchResults {
+            query: String::new(),
+            items: Vec::new(),
+        });
+    }
+
+    let pattern = format!("%{query}%");
+    let mut items = Vec::new();
+    append_session_search_results(connection, query, &pattern, include_low_info, &mut items)?;
+    append_prompt_search_results(connection, &pattern, include_low_info, &mut items)?;
+    append_draft_search_results(connection, &pattern, &mut items)?;
+
+    items.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| right.sent_at.cmp(&left.sent_at))
+            .then_with(|| left.session_id.cmp(&right.session_id))
+    });
+    items.truncate(80);
+
+    Ok(PromptSearchResults {
+        query: query.to_string(),
+        items,
+    })
+}
+
+fn append_session_search_results(
+    connection: &Connection,
+    query: &str,
+    pattern: &str,
+    include_low_info: bool,
+    items: &mut Vec<PromptSearchResultItem>,
+) -> Result<(), String> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            select provider, session_id, cwd, title, first_prompt, updated_at
+            from sessions
+            where title like ?1
+               or first_prompt like ?1
+            order by updated_at desc
+            limit 40
+            "#,
+        )
+        .map_err(|error| format!("准备搜索 Agent 会话失败：{error}"))?;
+    let rows = statement
+        .query_map(params![pattern], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(|error| format!("搜索 Agent 会话失败：{error}"))?;
+
+    for row in rows {
+        let (provider, session_id, cwd, title, first_prompt, updated_at) =
+            row.map_err(|error| format!("解析 Agent 会话搜索结果失败：{error}"))?;
+        let title = title.unwrap_or_else(|| short_session_title(&session_id));
+        let title_matches = contains_query(&title, query);
+        let first_prompt_matches = first_prompt
+            .as_deref()
+            .is_some_and(|prompt| contains_query(prompt, query));
+
+        if title_matches {
+            items.push(search_result(
+                &provider,
+                &session_id,
+                cwd.as_deref(),
+                &title,
+                "session_title",
+                "会话标题",
+                &title,
+                false,
+                None,
+                &updated_at,
+            ));
+        }
+
+        if let Some(first_prompt) = first_prompt
+            .filter(|prompt| include_low_info || !is_low_info_prompt(prompt))
+            .filter(|_| first_prompt_matches)
+        {
+            items.push(search_result(
+                &provider,
+                &session_id,
+                cwd.as_deref(),
+                &title,
+                "first_prompt",
+                "首条 prompt",
+                &first_prompt,
+                is_low_info_prompt(&first_prompt),
+                None,
+                &updated_at,
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn append_prompt_search_results(
+    connection: &Connection,
+    pattern: &str,
+    include_low_info: bool,
+    items: &mut Vec<PromptSearchResultItem>,
+) -> Result<(), String> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            select
+              prompt_events.provider,
+              prompt_events.session_id,
+              sessions.cwd,
+              sessions.title,
+              prompt_events.prompt_md,
+              prompt_events.is_low_info,
+              prompt_events.sent_at,
+              sessions.updated_at
+            from prompt_events
+            join sessions on sessions.id = prompt_events.session_db_id
+            where prompt_events.prompt_md like ?1
+              and (?2 = 1 or prompt_events.is_low_info = 0)
+            order by prompt_events.sent_at desc, prompt_events.id desc
+            limit 80
+            "#,
+        )
+        .map_err(|error| format!("准备搜索已发送 prompt 失败：{error}"))?;
+    let rows = statement
+        .query_map(params![pattern, bool_to_i64(include_low_info)], |row| {
+            let is_low_info: i64 = row.get(5)?;
+
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                is_low_info != 0,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+            ))
+        })
+        .map_err(|error| format!("搜索已发送 prompt 失败：{error}"))?;
+
+    for row in rows {
+        let (provider, session_id, cwd, title, prompt_md, is_low_info, sent_at, updated_at) =
+            row.map_err(|error| format!("解析已发送 prompt 搜索结果失败：{error}"))?;
+        let title = title.unwrap_or_else(|| short_session_title(&session_id));
+        items.push(search_result(
+            &provider,
+            &session_id,
+            cwd.as_deref(),
+            &title,
+            "sent_prompt",
+            "已发送 prompt",
+            &prompt_md,
+            is_low_info,
+            Some(sent_at),
+            &updated_at,
+        ));
+    }
+
+    Ok(())
+}
+
+fn append_draft_search_results(
+    connection: &Connection,
+    pattern: &str,
+    items: &mut Vec<PromptSearchResultItem>,
+) -> Result<(), String> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            select
+              sessions.provider,
+              sessions.session_id,
+              sessions.cwd,
+              sessions.title,
+              drafts.content_md,
+              drafts.updated_at
+            from drafts
+            join sessions on sessions.id = drafts.session_db_id
+            where drafts.content_md like ?1
+              and trim(drafts.content_md) != ''
+            order by drafts.updated_at desc
+            limit 40
+            "#,
+        )
+        .map_err(|error| format!("准备搜索当前草稿失败：{error}"))?;
+    let rows = statement
+        .query_map(params![pattern], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(|error| format!("搜索当前草稿失败：{error}"))?;
+
+    for row in rows {
+        let (provider, session_id, cwd, title, content_md, updated_at) =
+            row.map_err(|error| format!("解析当前草稿搜索结果失败：{error}"))?;
+        let title = title.unwrap_or_else(|| short_session_title(&session_id));
+        items.push(search_result(
+            &provider,
+            &session_id,
+            cwd.as_deref(),
+            &title,
+            "current_draft",
+            "当前草稿",
+            &content_md,
+            false,
+            None,
+            &updated_at,
+        ));
+    }
+
+    Ok(())
+}
+
+fn search_result(
+    provider: &str,
+    session_id: &str,
+    cwd: Option<&str>,
+    title: &str,
+    match_kind: &str,
+    match_label: &str,
+    snippet_source: &str,
+    is_low_info: bool,
+    sent_at: Option<String>,
+    updated_at: &str,
+) -> PromptSearchResultItem {
+    PromptSearchResultItem {
+        provider: provider.to_string(),
+        provider_label: provider_label(provider).to_string(),
+        session_id: session_id.to_string(),
+        short_session_id: short_session_id(session_id),
+        title: title.to_string(),
+        project_name: cwd
+            .map(project_name_from_cwd)
+            .unwrap_or_else(|| "未知项目".to_string()),
+        match_kind: match_kind.to_string(),
+        match_label: match_label.to_string(),
+        snippet: snippet(snippet_source),
+        is_low_info,
+        sent_at,
+        updated_at: updated_at.to_string(),
+    }
+}
+
 fn archive_session(
     connection: &Connection,
     provider: &str,
@@ -751,6 +1129,14 @@ fn count_table(connection: &Connection, table: &str) -> Result<usize, String> {
         .map_err(|error| format!("读取数据表计数失败：{table}：{error}"))
 }
 
+fn bool_to_i64(value: bool) -> i64 {
+    if value {
+        1
+    } else {
+        0
+    }
+}
+
 fn session_db_id(connection: &Connection, provider: &str, session_id: &str) -> Result<i64, String> {
     connection
         .query_row(
@@ -815,6 +1201,21 @@ fn provider_label(provider: &str) -> &'static str {
         "codex" => "Codex CLI",
         _ => "未知 Agent",
     }
+}
+
+fn contains_query(value: &str, query: &str) -> bool {
+    value
+        .to_ascii_lowercase()
+        .contains(&query.to_ascii_lowercase())
+}
+
+fn snippet(value: &str) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut snippet = collapsed.chars().take(160).collect::<String>();
+    if collapsed.chars().count() > 160 {
+        snippet.push_str("...");
+    }
+    snippet
 }
 
 fn project_name_from_cwd(cwd: &str) -> String {
@@ -1031,6 +1432,63 @@ mod tests {
 
         assert_eq!(draft.content_md, "send this prompt");
         assert_eq!(draft.copy_state, "copied");
+    }
+
+    #[test]
+    fn prompt_history_keeps_low_info_but_can_hide_it() {
+        let home = isolated_home("history-store");
+        let store = PromptStore::new(home.join("promptbox.sqlite"));
+        store.initialize().unwrap();
+        store
+            .record_prompt_event(&test_event("claude", "history-session", "hi"))
+            .unwrap();
+        store
+            .record_prompt_event(&test_event(
+                "claude",
+                "history-session",
+                "implement prompt history",
+            ))
+            .unwrap();
+
+        let visible = store
+            .list_prompt_history("claude", "history-session", false)
+            .unwrap();
+        let all = store
+            .list_prompt_history("claude", "history-session", true)
+            .unwrap();
+
+        assert_eq!(visible.items.len(), 1);
+        assert_eq!(all.items.len(), 2);
+        assert!(all.items.iter().any(|item| item.is_low_info));
+    }
+
+    #[test]
+    fn search_covers_session_prompt_history_and_current_draft() {
+        let home = isolated_home("search-store");
+        let store = PromptStore::new(home.join("promptbox.sqlite"));
+        store.initialize().unwrap();
+        store
+            .record_prompt_event(&test_event(
+                "claude",
+                "search-session",
+                "implement prompt search",
+            ))
+            .unwrap();
+        store
+            .save_draft("claude", "search-session", "draft search query")
+            .unwrap();
+
+        let results = store.search_prompts("search", false).unwrap();
+        let match_kinds = results
+            .items
+            .iter()
+            .map(|item| item.match_kind.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(match_kinds.contains(&"session_title"));
+        assert!(match_kinds.contains(&"first_prompt"));
+        assert!(match_kinds.contains(&"sent_prompt"));
+        assert!(match_kinds.contains(&"current_draft"));
     }
 
     #[test]

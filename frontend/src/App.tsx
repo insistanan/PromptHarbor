@@ -98,6 +98,42 @@ type DraftState = {
   isEmpty: boolean;
 };
 
+type PromptHistoryItem = {
+  id: number;
+  promptMd: string;
+  promptHash: string;
+  isLowInfo: boolean;
+  matchedDraftId: number | null;
+  sentAt: string;
+  createdAt: string;
+};
+
+type PromptHistory = {
+  provider: string;
+  sessionId: string;
+  items: PromptHistoryItem[];
+};
+
+type PromptSearchResultItem = {
+  provider: string;
+  providerLabel: string;
+  sessionId: string;
+  shortSessionId: string;
+  title: string;
+  projectName: string;
+  matchKind: string;
+  matchLabel: string;
+  snippet: string;
+  isLowInfo: boolean;
+  sentAt: string | null;
+  updatedAt: string;
+};
+
+type PromptSearchResults = {
+  query: string;
+  items: PromptSearchResultItem[];
+};
+
 const menuItems = [
   { label: '会话', active: true },
   { label: '草稿', active: false },
@@ -126,6 +162,15 @@ export function App() {
   const [draftSaving, setDraftSaving] = useState(false);
   const [draftMessage, setDraftMessage] = useState<string | null>(null);
   const [editorVersion, setEditorVersion] = useState(0);
+  const [hideLowInfo, setHideLowInfo] = useState(false);
+  const [promptHistory, setPromptHistory] = useState<PromptHistory | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<PromptSearchResults>({
+    query: '',
+    items: [],
+  });
+  const [searchLoading, setSearchLoading] = useState(false);
 
   useEffect(() => {
     let disposed = false;
@@ -230,6 +275,7 @@ export function App() {
     : null;
   const selectedSessionIsActive = selectedSession?.status === 'active';
   const draftHasUnsavedChanges = draftContent !== lastSavedDraftContent;
+  const includeLowInfo = !hideLowInfo;
 
   useEffect(() => {
     let disposed = false;
@@ -325,6 +371,92 @@ export function App() {
     selectedSessionKey,
   ]);
 
+  useEffect(() => {
+    let disposed = false;
+
+    if (!selectedSession) {
+      setPromptHistory(null);
+      setHistoryLoading(false);
+      return () => {
+        disposed = true;
+      };
+    }
+
+    setHistoryLoading(true);
+    invoke<PromptHistory>('list_prompt_history', {
+      provider: selectedSession.provider,
+      sessionId: selectedSession.sessionId,
+      includeLowInfo,
+    })
+      .then((nextHistory) => {
+        if (!disposed) {
+          setPromptHistory(nextHistory);
+          setError(null);
+        }
+      })
+      .catch((reason) => {
+        if (!disposed) {
+          setError(String(reason));
+        }
+      })
+      .finally(() => {
+        if (!disposed) {
+          setHistoryLoading(false);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [
+    includeLowInfo,
+    selectedSession?.provider,
+    selectedSession?.sessionId,
+    selectedSession?.promptCount,
+  ]);
+
+  useEffect(() => {
+    let disposed = false;
+    const query = searchQuery.trim();
+
+    if (!query) {
+      setSearchResults({ query: '', items: [] });
+      setSearchLoading(false);
+      return () => {
+        disposed = true;
+      };
+    }
+
+    setSearchLoading(true);
+    const timer = window.setTimeout(() => {
+      invoke<PromptSearchResults>('search_prompts', {
+        query,
+        includeLowInfo,
+      })
+        .then((nextResults) => {
+          if (!disposed) {
+            setSearchResults(nextResults);
+            setError(null);
+          }
+        })
+        .catch((reason) => {
+          if (!disposed) {
+            setError(String(reason));
+          }
+        })
+        .finally(() => {
+          if (!disposed) {
+            setSearchLoading(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [includeLowInfo, searchQuery]);
+
   const copyCurrentDraft = () => {
     if (!selectedSession || !selectedSessionIsActive || !draftContent.trim()) {
       return;
@@ -388,6 +520,12 @@ export function App() {
           message: String(reason),
         };
       });
+  const setSelectedSessionFromSearch = (result: PromptSearchResultItem) => {
+    const nextSession = findSession(sessions, result.provider, result.sessionId);
+    if (nextSession) {
+      setSelectedSession(nextSession);
+    }
+  };
 
   return (
     <main className="app-shell" aria-label="PromptHarbor 工作区">
@@ -613,37 +751,26 @@ export function App() {
         <section className="prompt-history" aria-label="prompt 历史">
           <div className="section-heading">
             <h3>prompt 历史</h3>
-            <span>{selectedSession ? selectedSession.providerLabel : 'hook-first'}</span>
+            <span>{historyLoading ? '读取中' : `${promptHistory?.items.length ?? 0} 条`}</span>
           </div>
           {selectedSession ? (
             <div className="session-detail">
-              <dl className="runtime-list">
+              <div className="history-toolbar">
                 <div>
-                  <dt>Agent 客户端</dt>
-                  <dd>{selectedSession.providerLabel}</dd>
+                  <strong>{selectedSession.providerLabel}</strong>
+                  <span>
+                    {selectedSession.shortSessionId} · {selectedSession.projectName} ·{' '}
+                    {sessionStatusLabel(selectedSession.status)}
+                  </span>
                 </div>
-                <div>
-                  <dt>session ID</dt>
-                  <dd>{selectedSession.shortSessionId}</dd>
-                </div>
-                <div>
-                  <dt>项目</dt>
-                  <dd>{selectedSession.projectName}</dd>
-                </div>
-                <div>
-                  <dt>状态</dt>
-                  <dd>{sessionStatusLabel(selectedSession.status)}</dd>
-                </div>
-                <div>
-                  <dt>最近 hook</dt>
-                  <dd>{formatDateTime(selectedSession.lastHookAt)}</dd>
-                </div>
-                <div>
-                  <dt>已发送 prompt</dt>
-                  <dd>{selectedSession.promptCount} 条</dd>
-                </div>
-              </dl>
-              <div className="wizard-actions">
+                <label className="check-control">
+                  <input
+                    checked={hideLowInfo}
+                    onChange={(event) => setHideLowInfo(event.currentTarget.checked)}
+                    type="checkbox"
+                  />
+                  隐藏低信息
+                </label>
                 <button
                   className="secondary-action"
                   disabled={selectedSession.status === 'archived'}
@@ -653,6 +780,7 @@ export function App() {
                   归档
                 </button>
               </div>
+              <PromptHistoryList items={promptHistory?.items ?? []} />
             </div>
           ) : (
             <div className="empty-state">
@@ -660,6 +788,33 @@ export function App() {
               <p>只记录用户真实提交的 prompt，模型回复不会进入 PromptHarbor。</p>
             </div>
           )}
+        </section>
+
+        <section className="search-panel" aria-label="prompt 搜索">
+          <div className="section-heading">
+            <h3>搜索</h3>
+            <span>{searchLoading ? '搜索中' : `${searchResults.items.length} 条`}</span>
+          </div>
+          <div className="search-body">
+            <div className="search-row">
+              <input
+                aria-label="搜索会话标题、prompt 和当前草稿"
+                onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                placeholder="搜索会话标题、首条 prompt、已发送 prompt、当前草稿"
+                type="search"
+                value={searchQuery}
+              />
+              <label className="check-control">
+                <input
+                  checked={hideLowInfo}
+                  onChange={(event) => setHideLowInfo(event.currentTarget.checked)}
+                  type="checkbox"
+                />
+                隐藏低信息
+              </label>
+            </div>
+            <SearchResultsList items={searchResults.items} onSelect={setSelectedSessionFromSearch} />
+          </div>
         </section>
 
         <section className="draft-panel" aria-label="当前草稿">
@@ -750,6 +905,70 @@ function MilkdownDraftEditor({
   return (
     <div className={disabled || loading ? 'milkdown-host disabled' : 'milkdown-host'}>
       <Milkdown />
+    </div>
+  );
+}
+
+function PromptHistoryList({ items }: { items: PromptHistoryItem[] }) {
+  if (!items.length) {
+    return (
+      <div className="history-empty">
+        <p>暂无已发送 prompt</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="history-list" aria-label="已发送 prompt 列表">
+      {items.map((item) => (
+        <article className={item.isLowInfo ? 'prompt-card low-info' : 'prompt-card'} key={item.id}>
+          <header>
+            <span>{formatDateTime(item.sentAt)}</span>
+            <span>{item.isLowInfo ? '低信息' : item.matchedDraftId ? '匹配草稿' : '正式'}</span>
+          </header>
+          <pre>{item.promptMd}</pre>
+          <footer>hash {item.promptHash.slice(0, 12)}</footer>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function SearchResultsList({
+  items,
+  onSelect,
+}: {
+  items: PromptSearchResultItem[];
+  onSelect: (item: PromptSearchResultItem) => void;
+}) {
+  if (!items.length) {
+    return (
+      <div className="history-empty">
+        <p>暂无搜索结果</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="search-results" aria-label="搜索结果列表">
+      {items.map((item, index) => (
+        <button
+          className={item.isLowInfo ? 'search-result low-info' : 'search-result'}
+          key={`${item.provider}:${item.sessionId}:${item.matchKind}:${index}`}
+          onClick={() => onSelect(item)}
+          type="button"
+        >
+          <span>
+            <strong>{item.title}</strong>
+            <small>
+              {item.matchLabel} · {item.providerLabel} · {item.shortSessionId} ·{' '}
+              {item.projectName}
+            </small>
+          </span>
+          <em>{item.snippet}</em>
+          <small>{formatDateTime(item.sentAt ?? item.updatedAt)}</small>
+        </button>
+      ))}
     </div>
   );
 }
