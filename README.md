@@ -4,7 +4,7 @@
 
 ## 项目状态
 
-当前已进入 MVP 实现阶段，仓库包含 Tauri + React + Rust workspace 的初始骨架。
+当前 MVP 核心闭环已在 Windows 环境完成一轮实机验证，仓库包含 Tauri + React + Rust workspace 的可运行实现。
 
 已确认的 MVP 目标：
 
@@ -19,12 +19,12 @@
 
 ## 开发启动
 
-当前骨架包含：
+当前实现包含：
 
 - `crates/promptbox-core`：共享领域类型和应用状态。
-- `crates/promptbox-hook`：hook 可执行文件骨架，已支持 `--version`。
-- `crates/promptbox-app`：Tauri 应用骨架，提供最小 `app_status` IPC command。
-- `frontend`：React + Vite 前端骨架。
+- `crates/promptbox-hook`：Claude Code / Codex CLI 调用的轻量采集器，支持 `--version`、本地端点投递和 spool fallback。
+- `crates/promptbox-app`：Tauri 应用、本地采集端点、SQLite 持久化、hook 配置向导、托盘和窗口生命周期。
+- `frontend`：React + Vite + Milkdown 会话工作区，支持草稿、复制、历史、搜索和暂停记录。
 
 PromptBox home 默认路径：
 
@@ -80,7 +80,7 @@ npm --prefix frontend run tauri:dev
 npm --prefix frontend run dev
 ```
 
-当前环境尚未运行安装、编译或测试；以上命令作为项目启动入口保留。
+Windows MVP 实机验证记录见 [MVP 方案设计](docs/promptbox-design.md#23-windows-mvp-实机验证记录)。
 
 ## 核心概念
 

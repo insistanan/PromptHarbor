@@ -2,9 +2,9 @@
 
 ## 0. 方案状态
 
-MVP 方案已确认，可以进入实现拆分阶段。
+MVP 方案已确认，核心闭环已完成 Windows 实机验证。
 
-本方案确认的是产品边界、领域术语、架构方向、数据模型、hooks 接入策略、隐私边界和 MVP 验收范围。Claude Code、Codex CLI、Tauri、Milkdown 在当前 Windows 环境下的具体行为仍需按“待验证清单”实测。
+本方案确认的是产品边界、领域术语、架构方向、数据模型、hooks 接入策略、隐私边界和 MVP 验收范围。Claude Code、Codex CLI、Tauri、Milkdown 在当前 Windows 环境下的 MVP 实测结论见“Windows MVP 实机验证记录”。
 
 ## 1. 背景
 
@@ -905,20 +905,26 @@ prompt 可能包含敏感信息。
 - 已发送 prompt 以 hook 捕获为准。
 - 自动注入作为后续独立决策。
 
-## 23. 待验证清单
+## 23. Windows MVP 实机验证记录
 
-实现前需要实测：
+验证环境：Windows + PowerShell，PromptHarbor 以 Tauri 开发模式运行，Claude Code 和 Codex CLI 使用用户级 hook 配置。验证日期：2026-05-03。
 
-- Claude Code 当前版本 `UserPromptSubmit` 输入字段。
-- Claude Code Windows 下 hook 命令路径包含空格时的转义规则。
-- Claude Code 用户级和项目级 settings 合并行为。
-- Codex CLI 当前版本启用 `codex_hooks` 的准确配置位置和优先级。
-- Codex CLI `UserPromptSubmit` 是否始终提供 `session_id`、`turn_id`、`transcript_path`。
-- Codex CLI 在 Windows 下 hooks 并发执行时的超时和 stdin 行为。
-- PromptBox hook 在配置读取失败时不读取 stdin 的实现可行性。
-- Milkdown 在 Tauri WebView2 中的大文档性能。
-- Tauri 剪贴板 API 在 Windows 终端工作流里的稳定性。
-- Tauri 托盘在 Windows 下关闭隐藏和退出行为。
+已验证结论：
+
+- Claude Code 的 `UserPromptSubmit` 可提供 `hook_event_name`、`session_id`、`cwd`、`transcript_path`、`prompt` 等字段，PromptHarbor 能用 `provider + session_id` 创建或更新会话，并只记录用户 prompt。
+- Claude Code 用户级 settings 写入时保留已有 hooks 和未知字段；PromptHarbor 生成的 hook 命令使用 `promptbox-hook.exe` 绝对路径，并能在 Windows 路径场景下被 Claude Code 调用。
+- Codex CLI 需要开启 `codex_hooks`，PromptHarbor 的配置向导会写入用户级 hooks 配置并开启该 feature flag；Codex `UserPromptSubmit` 能被采集并归一化为同一套会话和 prompt 历史模型。
+- Codex CLI hook 采集链路在真实对话中可正常读取 stdin 并提交到本地端点；PromptHarbor 不依赖多个 hook 的执行顺序，并使用 `turn_id` 优先去重，缺少 `turn_id` 时回退到内容 hash 和时间窗口策略。
+- 完整闭环已验证：在 Milkdown 草稿中编写 prompt，复制到 Agent 客户端提交，hook 记录实际发送内容，内容 hash 一致后清空草稿，随后可在历史和搜索中回看。
+- 暂停记录已验证：暂停期间本地端点保持运行但不写入 `sessions`、`prompt_events` 或 `raw_hook_events`；hook 侧设计仍要求配置读取失败或暂停开启时不读取 stdin。
+- Tauri 托盘已验证：关闭主窗口会隐藏到托盘，本地采集端点继续运行；托盘可重新打开主窗口，也可退出 PromptHarbor 并停止进程和端点。
+- Tauri 剪贴板在 Windows 终端工作流中可用于复制草稿并粘贴提交。
+
+仍需后续版本继续观察：
+
+- Claude Code 和 Codex CLI hooks 属于外部集成点，字段、配置路径和 feature flag 行为需要随上游版本变化重新确认。
+- Milkdown 大文档性能只完成 MVP 场景验证，极长 prompt、图片或复杂 Markdown 不是当前 MVP 的验收范围。
+- 配置损坏、权限异常、端口冲突和多实例启动需要在后续稳定性议题中补充更系统的异常矩阵。
 
 ## 24. ADR
 
