@@ -1,3 +1,7 @@
+use crate::hook_config::{
+    backup_config_file, ensure_user_prompt_submit_hook, has_promptbox_hook,
+    has_stale_promptbox_hook, hook_command, prune_empty_hooks_root, remove_promptbox_hooks,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -24,8 +28,8 @@ pub fn detect_codex_user_hook(hook_path: &Path) -> Result<CodexHookStatus, Strin
     let expected_command = codex_hook_command(hook_path);
     let hook_installed = if paths.hooks_path.exists() {
         let root = read_json(&paths.hooks_path)?;
-        has_promptbox_codex_hook(&root, &expected_command)
-            && !has_stale_promptbox_codex_hook(&root, &expected_command)
+        has_promptbox_hook(&root, &expected_command)
+            && !has_stale_promptbox_hook(&root, &expected_command, "codex")
     } else {
         false
     };
@@ -65,17 +69,17 @@ pub fn install_codex_user_hook(hook_path: &Path) -> Result<CodexHookStatus, Stri
     };
 
     let hooks_backup_path = if paths.hooks_path.exists() {
-        Some(backup_file(&paths.hooks_path)?)
+        Some(backup_config_file(&paths.hooks_path, "Codex CLI")?)
     } else {
         None
     };
     let config_backup_path = if paths.config_path.exists() {
-        Some(backup_file(&paths.config_path)?)
+        Some(backup_config_file(&paths.config_path, "Codex CLI")?)
     } else {
         None
     };
 
-    ensure_codex_hook_value(&mut hooks_root, &expected_command)?;
+    ensure_user_prompt_submit_hook(&mut hooks_root, &expected_command, "codex", "Codex CLI")?;
     ensure_codex_hooks_enabled(&mut config_root)?;
     write_json(&paths.hooks_path, &hooks_root)?;
     write_toml(&paths.config_path, &config_root)?;
@@ -102,10 +106,10 @@ pub fn uninstall_codex_user_hook(hook_path: &Path) -> Result<CodexHookStatus, St
     let mut hook_removed = false;
     if paths.hooks_path.exists() {
         let mut hooks_root = read_json(&paths.hooks_path)?;
-        hook_removed = has_promptbox_codex_hook(&hooks_root, &expected_command)
-            || has_stale_promptbox_codex_hook(&hooks_root, &expected_command);
-        hooks_backup_path = Some(backup_file(&paths.hooks_path)?);
-        remove_promptbox_codex_hooks(&mut hooks_root);
+        hook_removed = has_promptbox_hook(&hooks_root, &expected_command)
+            || has_stale_promptbox_hook(&hooks_root, &expected_command, "codex");
+        hooks_backup_path = Some(backup_config_file(&paths.hooks_path, "Codex CLI")?);
+        remove_promptbox_hooks(&mut hooks_root, "codex");
         prune_empty_hooks_root(&mut hooks_root);
         write_json(&paths.hooks_path, &hooks_root)?;
     }
@@ -153,17 +157,6 @@ fn codex_user_paths() -> Result<CodexUserPaths, String> {
 
 fn codex_hook_command(hook_path: &Path) -> String {
     hook_command(hook_path, "codex")
-}
-
-fn hook_command(hook_path: &Path, provider: &str) -> String {
-    if cfg!(windows) {
-        format!(
-            "cmd /d /s /c \"\"{}\" --provider {provider} || exit /b 0\"",
-            hook_path.to_string_lossy()
-        )
-    } else {
-        format!("\"{}\" --provider {provider}", hook_path.to_string_lossy())
-    }
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
@@ -218,66 +211,6 @@ fn write_toml(path: &Path, root: &toml::Value) -> Result<(), String> {
     })
 }
 
-fn backup_file(path: &Path) -> Result<PathBuf, String> {
-    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("config");
-    let backup_path = path.with_file_name(format!("{file_name}.promptbox.{timestamp}.bak"));
-    fs::copy(path, &backup_path).map_err(|error| {
-        format!(
-            "备份 Codex CLI 配置失败：{} -> {}：{error}",
-            path.display(),
-            backup_path.display()
-        )
-    })?;
-    Ok(backup_path)
-}
-
-fn ensure_codex_hook_value(root: &mut Value, expected_command: &str) -> Result<(), String> {
-    let object = root
-        .as_object_mut()
-        .ok_or_else(|| "Codex CLI hooks.json 根节点不是 JSON object".to_string())?;
-    let hooks_value = object.entry("hooks").or_insert_with(|| json!({}));
-    let hooks_object = hooks_value
-        .as_object_mut()
-        .ok_or_else(|| "Codex CLI hooks 字段不是 JSON object".to_string())?;
-    let user_prompt_submit = hooks_object
-        .entry("UserPromptSubmit")
-        .or_insert_with(|| json!([]));
-    let user_prompt_submit_array = user_prompt_submit
-        .as_array_mut()
-        .ok_or_else(|| "Codex CLI UserPromptSubmit hooks 不是 JSON array".to_string())?;
-
-    let has_current = user_prompt_submit_array
-        .iter()
-        .any(|value| has_promptbox_codex_hook(value, expected_command));
-    let has_stale = user_prompt_submit_array
-        .iter()
-        .any(|value| has_stale_promptbox_codex_hook(value, expected_command));
-
-    if has_current && !has_stale {
-        return Ok(());
-    }
-
-    for value in user_prompt_submit_array.iter_mut() {
-        remove_promptbox_codex_hooks(value);
-    }
-    user_prompt_submit_array.retain(|value| !empty_hook_entry(value));
-
-    user_prompt_submit_array.push(json!({
-        "hooks": [
-            {
-                "type": "command",
-                "command": expected_command
-            }
-        ]
-    }));
-
-    Ok(())
-}
-
 fn ensure_codex_hooks_enabled(root: &mut toml::Value) -> Result<(), String> {
     let table = root
         .as_table_mut()
@@ -297,120 +230,6 @@ fn codex_hooks_enabled(root: &toml::Value) -> bool {
         .and_then(|features| features.get("codex_hooks"))
         .and_then(toml::Value::as_bool)
         .unwrap_or(false)
-}
-
-fn has_promptbox_codex_hook(root: &Value, expected_command: &str) -> bool {
-    match root {
-        Value::String(value) => command_matches_expected_promptbox_codex(value, expected_command),
-        Value::Array(items) => items
-            .iter()
-            .any(|value| has_promptbox_codex_hook(value, expected_command)),
-        Value::Object(object) => object
-            .values()
-            .any(|value| has_promptbox_codex_hook(value, expected_command)),
-        _ => false,
-    }
-}
-
-fn has_stale_promptbox_codex_hook(root: &Value, expected_command: &str) -> bool {
-    match root {
-        Value::String(value) => {
-            command_matches_promptbox_codex(value)
-                && !command_matches_expected_promptbox_codex(value, expected_command)
-        }
-        Value::Array(items) => items
-            .iter()
-            .any(|value| has_stale_promptbox_codex_hook(value, expected_command)),
-        Value::Object(object) => object
-            .values()
-            .any(|value| has_stale_promptbox_codex_hook(value, expected_command)),
-        _ => false,
-    }
-}
-
-fn remove_promptbox_codex_hooks(root: &mut Value) {
-    match root {
-        Value::Array(items) => {
-            for value in items.iter_mut() {
-                remove_promptbox_codex_hooks(value);
-            }
-            items.retain(|value| {
-                !is_promptbox_codex_command_hook(value) && !empty_hook_entry(value)
-            });
-        }
-        Value::Object(object) => {
-            for value in object.values_mut() {
-                remove_promptbox_codex_hooks(value);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn prune_empty_hooks_root(root: &mut Value) {
-    let Some(object) = root.as_object_mut() else {
-        return;
-    };
-    if let Some(hooks) = object.get_mut("hooks") {
-        prune_empty_hook_containers(hooks);
-    }
-    if object
-        .get("hooks")
-        .is_some_and(|value| matches!(value, Value::Object(map) if map.is_empty()))
-    {
-        object.remove("hooks");
-    }
-}
-
-fn prune_empty_hook_containers(root: &mut Value) {
-    match root {
-        Value::Object(object) => {
-            for value in object.values_mut() {
-                prune_empty_hook_containers(value);
-            }
-            object.retain(|_, value| !value_is_empty_container(value));
-        }
-        Value::Array(items) => {
-            for value in items.iter_mut() {
-                prune_empty_hook_containers(value);
-            }
-            items.retain(|value| !value_is_empty_container(value));
-        }
-        _ => {}
-    }
-}
-
-fn value_is_empty_container(value: &Value) -> bool {
-    matches!(value, Value::Array(items) if items.is_empty())
-        || matches!(value, Value::Object(object) if object.is_empty())
-}
-
-fn is_promptbox_codex_command_hook(value: &Value) -> bool {
-    value
-        .as_object()
-        .and_then(|object| object.get("command"))
-        .and_then(Value::as_str)
-        .is_some_and(command_matches_promptbox_codex)
-}
-
-fn empty_hook_entry(value: &Value) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-
-    object
-        .get("hooks")
-        .and_then(Value::as_array)
-        .is_some_and(Vec::is_empty)
-}
-
-fn command_matches_promptbox_codex(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    lower.contains("promptbox-hook") && lower.contains("--provider") && lower.contains("codex")
-}
-
-fn command_matches_expected_promptbox_codex(command: &str, expected_command: &str) -> bool {
-    command.trim().eq_ignore_ascii_case(expected_command.trim())
 }
 
 fn codex_status_message(hook_installed: bool, codex_hooks_enabled: bool) -> String {
@@ -534,8 +353,12 @@ mod tests {
         install_codex_user_hook(&current_hook_path).unwrap();
         let updated = read_json(&hooks_path).unwrap();
 
-        assert!(has_promptbox_codex_hook(&updated, &current_command));
-        assert!(!has_stale_promptbox_codex_hook(&updated, &current_command));
+        assert!(has_promptbox_hook(&updated, &current_command));
+        assert!(!has_stale_promptbox_hook(
+            &updated,
+            &current_command,
+            "codex"
+        ));
         assert!(serde_json::to_string(&updated)
             .unwrap()
             .contains("echo existing"));

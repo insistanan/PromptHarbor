@@ -1,6 +1,7 @@
 mod claude;
 mod codex;
 mod event;
+mod hook_config;
 mod runtime;
 mod store;
 

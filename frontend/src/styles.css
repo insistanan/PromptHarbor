@@ -916,6 +916,17 @@ h3 {
   line-height: 1.55;
 }
 
+.missing-image-notice {
+  margin: 0;
+  border: 1px solid #ead4bb;
+  border-radius: 7px;
+  background: #fff8ed;
+  color: #92521a;
+  padding: 7px 9px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .history-attachment-strip {
   min-width: 0;
   display: flex;

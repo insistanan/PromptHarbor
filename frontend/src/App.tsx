@@ -1,11 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ClipboardEvent as ReactClipboardEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Editor, defaultValueCtx, rootCtx } from '@milkdown/kit/core';
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener';
 import { history } from '@milkdown/kit/plugin/history';
 import { commonmark } from '@milkdown/kit/preset/commonmark';
 import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react';
+import * as api from './api';
+import {
+  PromptHistoryList,
+  type PromptAttachment,
+  type PromptAttachmentDataUrl,
+  type PromptHistoryItem,
+} from './features/history/PromptHistoryList';
+import { PromptSearch } from './features/search/PromptSearch';
+import type { PromptSearchResultItem } from './features/search/PromptSearch';
+import { RuntimeSettings } from './features/settings/RuntimeSettings';
 
 type AppStatus = {
   appName: string;
@@ -36,28 +45,8 @@ type AppStatus = {
   collectorMessage: string;
   importedSpoolEvents: number;
   receivedPromptEvents: number;
+  pausedPromptEvents: number;
   startupErrors: string[];
-};
-
-type ClaudeHookStatus = {
-  settingsPath: string;
-  expectedCommand: string;
-  installed: boolean;
-  readable: boolean;
-  message: string;
-  backupPath: string | null;
-};
-
-type CodexHookStatus = {
-  hooksPath: string;
-  configPath: string;
-  expectedCommand: string;
-  hookInstalled: boolean;
-  codexHooksEnabled: boolean;
-  ready: boolean;
-  message: string;
-  hooksBackupPath: string | null;
-  configBackupPath: string | null;
 };
 
 type SessionListItem = {
@@ -137,67 +126,10 @@ type DraftList = {
   items: DraftListItem[];
 };
 
-type PromptAttachment = {
-  id: number;
-  kind: string;
-  mimeType: string;
-  filePath: string;
-  fileName: string;
-  fileSize: number;
-  placeholder: string | null;
-  createdAt: string;
-};
-
-type PromptAttachmentDataUrl = {
-  id: number;
-  mimeType: string;
-  dataUrl: string;
-};
-
-type PromptHistoryItem = {
-  id: number;
-  promptMd: string;
-  promptHash: string;
-  isLowInfo: boolean;
-  matchedDraftId: number | null;
-  sentAt: string;
-  createdAt: string;
-  attachments: PromptAttachment[];
-};
-
 type PromptHistory = {
   provider: string;
   sessionId: string;
   items: PromptHistoryItem[];
-};
-
-type PromptSearchResultItem = {
-  provider: string;
-  providerLabel: string;
-  sessionId: string;
-  shortSessionId: string;
-  title: string;
-  projectName: string;
-  matchKind: string;
-  matchLabel: string;
-  snippet: string;
-  isLowInfo: boolean;
-  sentAt: string | null;
-  updatedAt: string;
-};
-
-type PromptSearchResults = {
-  query: string;
-  items: PromptSearchResultItem[];
-};
-
-type RuntimeConfigDraft = {
-  localEndpoint: string;
-  recordingPaused: boolean;
-  maybeClosedAfterHours: string;
-  retainRawHookEvents: boolean;
-  rawHookEventsRetentionDays: string;
-  autostart: boolean;
 };
 
 type DraftImageAttachment = {
@@ -239,18 +171,9 @@ export function App() {
   });
   const [activeView, setActiveView] = useState<MainView>('sessions');
   const [selectedSession, setSelectedSession] = useState<SessionListItem | null>(null);
-  const [claudeStatus, setClaudeStatus] = useState<ClaudeHookStatus | null>(null);
-  const [codexStatus, setCodexStatus] = useState<CodexHookStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
-  const [installingClaude, setInstallingClaude] = useState(false);
-  const [installingCodex, setInstallingCodex] = useState(false);
-  const [uninstallingClaude, setUninstallingClaude] = useState(false);
-  const [uninstallingCodex, setUninstallingCodex] = useState(false);
   const [deletingSession, setDeletingSession] = useState(false);
-  const [configDraft, setConfigDraft] = useState<RuntimeConfigDraft | null>(null);
-  const [configDirty, setConfigDirty] = useState(false);
-  const [configSaving, setConfigSaving] = useState(false);
   const [draftList, setDraftList] = useState<DraftList | null>(null);
   const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
   const [draft, setDraft] = useState<DraftState | null>(null);
@@ -272,17 +195,12 @@ export function App() {
   const [sessionHistoryQuery, setSessionHistoryQuery] = useState('');
   const [promptHistory, setPromptHistory] = useState<PromptHistory | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<PromptSearchResults>({
-    query: '',
-    items: [],
-  });
-  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchResultCount, setSearchResultCount] = useState(0);
 
   useEffect(() => {
     let disposed = false;
     const loadStatus = () => {
-      invoke<AppStatus>('app_status')
+      api.getAppStatus<AppStatus>()
         .then((nextStatus) => {
           if (!disposed) {
             setStatus(nextStatus);
@@ -296,7 +214,7 @@ export function App() {
         });
     };
     const loadSessions = () => {
-      invoke<SessionList>('list_sessions')
+      api.listSessions<SessionList>()
         .then((nextSessions) => {
           if (!disposed) {
             setSessions(nextSessions);
@@ -318,35 +236,6 @@ export function App() {
 
     loadStatus();
     loadSessions();
-    const loadClaudeStatus = () => {
-      invoke<ClaudeHookStatus>('claude_hook_status')
-        .then((nextStatus) => {
-          if (!disposed) {
-            setClaudeStatus(nextStatus);
-          }
-        })
-        .catch((reason) => {
-          if (!disposed) {
-            setError(String(reason));
-          }
-        });
-    };
-    const loadCodexStatus = () => {
-      invoke<CodexHookStatus>('codex_hook_status')
-        .then((nextStatus) => {
-          if (!disposed) {
-            setCodexStatus(nextStatus);
-          }
-        })
-        .catch((reason) => {
-          if (!disposed) {
-            setError(String(reason));
-          }
-        });
-    };
-
-    loadClaudeStatus();
-    loadCodexStatus();
     const timer = window.setInterval(() => {
       loadStatus();
       loadSessions();
@@ -357,90 +246,6 @@ export function App() {
     };
   }, []);
 
-  const installClaudeHook = () => {
-    setInstallingClaude(true);
-    invoke<ClaudeHookStatus>('install_claude_hook')
-      .then((nextStatus) => {
-        setClaudeStatus(nextStatus);
-        setError(null);
-      })
-      .catch((reason) => setError(String(reason)))
-      .finally(() => setInstallingClaude(false));
-  };
-  const uninstallClaudeHook = () => {
-    setUninstallingClaude(true);
-    invoke<ClaudeHookStatus>('uninstall_claude_hook')
-      .then((nextStatus) => {
-        setClaudeStatus(nextStatus);
-        showCopyNotice('Claude Code hook 已取消');
-        setError(null);
-      })
-      .catch((reason) => setError(String(reason)))
-      .finally(() => setUninstallingClaude(false));
-  };
-  const installCodexHook = () => {
-    setInstallingCodex(true);
-    invoke<CodexHookStatus>('install_codex_hook')
-      .then((nextStatus) => {
-        setCodexStatus(nextStatus);
-        setError(null);
-      })
-      .catch((reason) => setError(String(reason)))
-      .finally(() => setInstallingCodex(false));
-  };
-  const uninstallCodexHook = () => {
-    setUninstallingCodex(true);
-    invoke<CodexHookStatus>('uninstall_codex_hook')
-      .then((nextStatus) => {
-        setCodexStatus(nextStatus);
-        showCopyNotice('Codex CLI hook 已取消');
-        setError(null);
-      })
-      .catch((reason) => setError(String(reason)))
-      .finally(() => setUninstallingCodex(false));
-  };
-  const updateConfigDraft = (patch: Partial<RuntimeConfigDraft>) => {
-    setConfigDraft((current) => {
-      const base = current ?? (status ? configDraftFromStatus(status) : emptyConfigDraft());
-      return { ...base, ...patch };
-    });
-    setConfigDirty(true);
-  };
-  const saveRuntimeConfig = () => {
-    if (!configDraft) {
-      return;
-    }
-
-    const maybeClosedAfterHours = Number(configDraft.maybeClosedAfterHours);
-    const rawHookEventsRetentionDays = Number(configDraft.rawHookEventsRetentionDays);
-    if (!Number.isFinite(maybeClosedAfterHours) || maybeClosedAfterHours < 1) {
-      setError('可能关闭判定时间必须大于 0 小时');
-      return;
-    }
-    if (!Number.isFinite(rawHookEventsRetentionDays) || rawHookEventsRetentionDays < 0) {
-      setError('raw hook 保留天数不能小于 0');
-      return;
-    }
-
-    setConfigSaving(true);
-    invoke<AppStatus>('update_runtime_config', {
-      localEndpoint: configDraft.localEndpoint,
-      recordingPaused: configDraft.recordingPaused,
-      maybeClosedAfterHours,
-      retainRawHookEvents: configDraft.retainRawHookEvents,
-      rawHookEventsRetentionDays,
-      autostart: configDraft.autostart,
-    })
-      .then((nextStatus) => {
-        setStatus(nextStatus);
-        setConfigDraft(configDraftFromStatus(nextStatus));
-        setConfigDirty(false);
-        showCopyNotice('运行配置已保存');
-        setError(null);
-      })
-      .catch((reason) => setError(String(reason)))
-      .finally(() => setConfigSaving(false));
-  };
   const selectedSessionKey = selectedSession
     ? sessionKey(selectedSession.provider, selectedSession.sessionId)
     : null;
@@ -460,14 +265,6 @@ export function App() {
     promptHistory?.items ?? [],
     sessionHistoryQuery,
   );
-
-  useEffect(() => {
-    if (!status || configDirty || configSaving) {
-      return;
-    }
-
-    setConfigDraft(configDraftFromStatus(status));
-  }, [configDirty, configSaving, status]);
 
   useEffect(() => {
     if (activeView !== 'drafts') {
@@ -508,7 +305,7 @@ export function App() {
     }
 
     setDraftLoading(true);
-    invoke<DraftList>('list_drafts', {
+    api.listDrafts<DraftList>({
       provider: selectedSession.provider,
       sessionId: selectedSession.sessionId,
     })
@@ -597,7 +394,7 @@ export function App() {
 
     const timer = window.setTimeout(() => {
       setDraftSaving(true);
-      invoke<DraftState>('save_draft_by_id', {
+      api.saveDraftById<DraftState>({
         provider: selectedSession.provider,
         sessionId: selectedSession.sessionId,
         draftId: draft.id,
@@ -638,7 +435,7 @@ export function App() {
     }
 
     setHistoryLoading(true);
-    invoke<PromptHistory>('list_prompt_history', {
+    api.listPromptHistory<PromptHistory>({
       provider: selectedSession.provider,
       sessionId: selectedSession.sessionId,
       includeLowInfo,
@@ -669,48 +466,6 @@ export function App() {
     selectedSession?.sessionId,
     selectedSession?.promptCount,
   ]);
-
-  useEffect(() => {
-    let disposed = false;
-    const query = searchQuery.trim();
-
-    if (!query) {
-      setSearchResults({ query: '', items: [] });
-      setSearchLoading(false);
-      return () => {
-        disposed = true;
-      };
-    }
-
-    setSearchLoading(true);
-    const timer = window.setTimeout(() => {
-      invoke<PromptSearchResults>('search_prompts', {
-        query,
-        includeLowInfo,
-      })
-        .then((nextResults) => {
-          if (!disposed) {
-            setSearchResults(nextResults);
-            setError(null);
-          }
-        })
-        .catch((reason) => {
-          if (!disposed) {
-            setError(String(reason));
-          }
-        })
-        .finally(() => {
-          if (!disposed) {
-            setSearchLoading(false);
-          }
-        });
-    }, 250);
-
-    return () => {
-      disposed = true;
-      window.clearTimeout(timer);
-    };
-  }, [includeLowInfo, searchQuery]);
 
   useEffect(() => {
     const imageCache = imageCacheRef.current;
@@ -791,7 +546,7 @@ export function App() {
     navigator.clipboard
       .writeText(draftContent)
       .then(() =>
-        invoke<DraftState>('mark_draft_copied_by_id', {
+        api.markDraftCopiedById<DraftState>({
           provider: selectedSession.provider,
           sessionId: selectedSession.sessionId,
           draftId: draft.id,
@@ -835,7 +590,7 @@ export function App() {
       return;
     }
 
-    invoke<DraftState>('create_draft', {
+    api.createDraft<DraftState>({
       provider: selectedSession.provider,
       sessionId: selectedSession.sessionId,
     })
@@ -867,7 +622,7 @@ export function App() {
     }
 
     setDraftContextMenu(null);
-    invoke<DraftList>('delete_draft', {
+    api.deleteDraft<DraftList>({
       provider: selectedSession.provider,
       sessionId: selectedSession.sessionId,
       draftId: item.id,
@@ -999,7 +754,7 @@ export function App() {
       return;
     }
 
-    invoke<PromptAttachmentDataUrl>('read_prompt_attachment_data_url', {
+    api.readPromptAttachmentDataUrl<PromptAttachmentDataUrl>({
       attachmentId: attachment.id,
     })
       .then((image) => dataUrlToBlob(image.dataUrl).then((blob) => ({ image, blob })))
@@ -1034,7 +789,7 @@ export function App() {
       return;
     }
 
-    invoke<void>('open_project_path', { path: selectedSession.cwd }).catch((reason) =>
+    api.openProjectPath({ path: selectedSession.cwd }).catch((reason) =>
       setError(String(reason)),
     );
   };
@@ -1053,14 +808,14 @@ export function App() {
     });
   };
   const archiveSession = (session: SessionListItem, force: boolean) =>
-    invoke<ArchiveSessionOutcome>('archive_session', {
+    api.archiveSession<ArchiveSessionOutcome>({
       provider: session.provider,
       sessionId: session.sessionId,
       force,
     })
       .then((outcome) => {
         if (outcome.archived) {
-          return invoke<SessionList>('list_sessions').then((nextSessions) => {
+          return api.listSessions<SessionList>().then((nextSessions) => {
             setSessions(nextSessions);
             setSelectedSession(findSession(nextSessions, session.provider, session.sessionId));
             return outcome;
@@ -1091,12 +846,12 @@ export function App() {
 
     const session = selectedSession;
     setDeletingSession(true);
-    invoke<DeleteSessionOutcome>('delete_session', {
+    api.deleteSession<DeleteSessionOutcome>({
       provider: session.provider,
       sessionId: session.sessionId,
     })
       .then((outcome) =>
-        invoke<SessionList>('list_sessions').then((nextSessions) => {
+        api.listSessions<SessionList>().then((nextSessions) => {
           setSessions(nextSessions);
           const nextSelected =
             nextSessions.active[0] ?? nextSessions.maybeClosed[0] ?? nextSessions.archived[0] ?? null;
@@ -1145,7 +900,7 @@ export function App() {
               type="button"
             >
               <span>{item.label}</span>
-              <small>{menuBadge(item.id, sessions, status, searchResults.items.length)}</small>
+              <small>{menuBadge(item.id, sessions, status, searchResultCount)}</small>
             </button>
           ))}
         </nav>
@@ -1208,287 +963,12 @@ export function App() {
         ) : null}
 
         {activeView === 'settings' ? (
-          <div className="settings-grid">
-            <section className="config-panel" aria-label="运行配置">
-              <div className="section-heading">
-                <h3>运行配置</h3>
-                <span>{configDirty ? '有未保存修改' : '已同步'}</span>
-              </div>
-              <div className="config-form">
-                <label className="switch-row">
-                  <span>
-                    <strong>开机启动</strong>
-                    <small>写入当前用户的 Windows 启动项</small>
-                  </span>
-                  <input
-                    checked={configDraft?.autostart ?? false}
-                    onChange={(event) =>
-                      updateConfigDraft({ autostart: event.currentTarget.checked })
-                    }
-                    type="checkbox"
-                  />
-                </label>
-                <label className="switch-row">
-                  <span>
-                    <strong>暂停记录</strong>
-                    <small>开启后 hook 仍可运行，但不会写入新 prompt</small>
-                  </span>
-                  <input
-                    checked={configDraft?.recordingPaused ?? false}
-                    onChange={(event) =>
-                      updateConfigDraft({ recordingPaused: event.currentTarget.checked })
-                    }
-                    type="checkbox"
-                  />
-                </label>
-                <label className="config-field">
-                  <span>本地采集端点</span>
-                  <input
-                    onChange={(event) =>
-                      updateConfigDraft({ localEndpoint: event.currentTarget.value })
-                    }
-                    value={configDraft?.localEndpoint ?? ''}
-                  />
-                  <small>端口修改保存后写入配置；监听端口需重启应用后切换。</small>
-                </label>
-                <div className="config-field-grid">
-                  <label className="config-field">
-                    <span>可能关闭判定</span>
-                    <input
-                      min="1"
-                      onChange={(event) =>
-                        updateConfigDraft({ maybeClosedAfterHours: event.currentTarget.value })
-                      }
-                      type="number"
-                      value={configDraft?.maybeClosedAfterHours ?? '12'}
-                    />
-                    <small>小时</small>
-                  </label>
-                  <label className="config-field">
-                    <span>raw 保留天数</span>
-                    <input
-                      min="0"
-                      onChange={(event) =>
-                        updateConfigDraft({
-                          rawHookEventsRetentionDays: event.currentTarget.value,
-                        })
-                      }
-                      type="number"
-                      value={configDraft?.rawHookEventsRetentionDays ?? '7'}
-                    />
-                    <small>0 表示启动后即过期</small>
-                  </label>
-                </div>
-                <label className="switch-row">
-                  <span>
-                    <strong>保留 raw hook 事件</strong>
-                    <small>仅用于短期诊断，正式历史仍只保存用户 prompt</small>
-                  </span>
-                  <input
-                    checked={configDraft?.retainRawHookEvents ?? true}
-                    onChange={(event) =>
-                      updateConfigDraft({ retainRawHookEvents: event.currentTarget.checked })
-                    }
-                    type="checkbox"
-                  />
-                </label>
-              </div>
-              <div className="wizard-actions">
-                <button
-                  className="primary-action"
-                  disabled={!configDirty || configSaving || !configDraft}
-                  onClick={saveRuntimeConfig}
-                  type="button"
-                >
-                  {configSaving ? '保存中' : '保存配置'}
-                </button>
-              </div>
-            </section>
-
-            <section className="runtime-panel" aria-label="本地运行时状态">
-              <div className="section-heading">
-                <h3>本地运行时</h3>
-                <span>{status?.recordingPaused ? '记录暂停' : '记录中'}</span>
-              </div>
-              <dl className="runtime-list">
-                <div>
-                  <dt>PromptBox home</dt>
-                  <dd>{status?.promptboxHome ?? '未初始化'}</dd>
-                </div>
-                <div>
-                  <dt>用户配置</dt>
-                  <dd>{status?.configPath ?? '未初始化'}</dd>
-                </div>
-                <div>
-                  <dt>hook 可执行文件</dt>
-                  <dd>{status?.hookBinaryPath ?? '未初始化'}</dd>
-                </div>
-                <div>
-                  <dt>hook 状态</dt>
-                  <dd className={status?.hookBinaryReady ? 'ok-text' : 'warning-text'}>
-                    {status?.hookBinaryMessage ?? '等待检测'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>数据库</dt>
-                  <dd className={status?.databaseReady ? 'ok-text' : 'warning-text'}>
-                    {status?.databaseMessage ?? '等待初始化'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>采集端点</dt>
-                  <dd className={status?.collectorReady ? 'ok-text' : 'warning-text'}>
-                    {status?.collectorMessage ?? '等待启动'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>记录状态</dt>
-                  <dd className={status?.recordingPaused ? 'warning-text' : 'ok-text'}>
-                    {status?.recordingPaused ? '已暂停，不写入 prompt' : '记录中'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Agent 会话</dt>
-                  <dd>{status ? `${status.sessionCount} 个` : '0 个'}</dd>
-                </div>
-                <div>
-                  <dt>正式 prompt</dt>
-                  <dd>{status ? `${status.promptEventCount} 条` : '0 条'}</dd>
-                </div>
-                <div>
-                  <dt>已采集事件</dt>
-                  <dd>{status ? `${status.receivedPromptEvents} 条` : '0 条'}</dd>
-                </div>
-                <div>
-                  <dt>spool 导入</dt>
-                  <dd>{status ? `${status.importedSpoolEvents} 条` : '0 条'}</dd>
-                </div>
-              </dl>
-              {status?.startupErrors.length ? (
-                <div className="runtime-errors">
-                  {status.startupErrors.map((item) => (
-                    <p key={item}>{item}</p>
-                  ))}
-                </div>
-              ) : null}
-            </section>
-
-            <section className="wizard-panel" aria-label="Claude Code 配置向导">
-              <div className="section-heading">
-                <h3>Claude Code</h3>
-                <span className={claudeStatus?.installed ? 'ok-text' : 'warning-text'}>
-                  {claudeStatus?.installed ? 'hook 已安装' : 'hook 未安装'}
-                </span>
-              </div>
-              <dl className="runtime-list">
-                <div>
-                  <dt>配置文件</dt>
-                  <dd>{claudeStatus?.settingsPath ?? '读取中'}</dd>
-                </div>
-                <div>
-                  <dt>hook 命令</dt>
-                  <dd>{claudeStatus?.expectedCommand ?? '读取中'}</dd>
-                </div>
-                <div>
-                  <dt>检测结果</dt>
-                  <dd>{claudeStatus?.message ?? '等待检测'}</dd>
-                </div>
-                {claudeStatus?.backupPath ? (
-                  <div>
-                    <dt>备份文件</dt>
-                    <dd>{claudeStatus.backupPath}</dd>
-                  </div>
-                ) : null}
-              </dl>
-              <div className="wizard-actions">
-                <button
-                  className="primary-action"
-                  disabled={installingClaude || uninstallingClaude || claudeStatus?.installed}
-                  onClick={installClaudeHook}
-                  type="button"
-                >
-                  {installingClaude ? '安装中' : '安装用户级 hook'}
-                </button>
-                <button
-                  className="secondary-action"
-                  disabled={installingClaude || uninstallingClaude || !claudeStatus?.installed}
-                  onClick={uninstallClaudeHook}
-                  type="button"
-                >
-                  {uninstallingClaude ? '取消中' : '取消 hook'}
-                </button>
-              </div>
-            </section>
-
-            <section className="wizard-panel" aria-label="Codex CLI 配置向导">
-              <div className="section-heading">
-                <h3>Codex CLI</h3>
-                <span className={codexStatus?.ready ? 'ok-text' : 'warning-text'}>
-                  {codexStatus?.ready ? 'hook 可用' : 'hook 未就绪'}
-                </span>
-              </div>
-              <dl className="runtime-list">
-                <div>
-                  <dt>hooks.json</dt>
-                  <dd>{codexStatus?.hooksPath ?? '读取中'}</dd>
-                </div>
-                <div>
-                  <dt>config.toml</dt>
-                  <dd>{codexStatus?.configPath ?? '读取中'}</dd>
-                </div>
-                <div>
-                  <dt>hook 命令</dt>
-                  <dd>{codexStatus?.expectedCommand ?? '读取中'}</dd>
-                </div>
-                <div>
-                  <dt>hook 状态</dt>
-                  <dd className={codexStatus?.hookInstalled ? 'ok-text' : 'warning-text'}>
-                    {codexStatus?.hookInstalled ? '已安装' : '未安装'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>feature</dt>
-                  <dd className={codexStatus?.codexHooksEnabled ? 'ok-text' : 'warning-text'}>
-                    {codexStatus?.codexHooksEnabled ? 'codex_hooks 已开启' : 'codex_hooks 未开启'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>检测结果</dt>
-                  <dd>{codexStatus?.message ?? '等待检测'}</dd>
-                </div>
-                {codexStatus?.hooksBackupPath ? (
-                  <div>
-                    <dt>hooks 备份</dt>
-                    <dd>{codexStatus.hooksBackupPath}</dd>
-                  </div>
-                ) : null}
-                {codexStatus?.configBackupPath ? (
-                  <div>
-                    <dt>config 备份</dt>
-                    <dd>{codexStatus.configBackupPath}</dd>
-                  </div>
-                ) : null}
-              </dl>
-              <div className="wizard-actions">
-                <button
-                  className="primary-action"
-                  disabled={installingCodex || uninstallingCodex || codexStatus?.ready}
-                  onClick={installCodexHook}
-                  type="button"
-                >
-                  {installingCodex ? '安装中' : '安装用户级 hook'}
-                </button>
-                <button
-                  className="secondary-action"
-                  disabled={installingCodex || uninstallingCodex || !codexStatus?.hookInstalled}
-                  onClick={uninstallCodexHook}
-                  type="button"
-                >
-                  {uninstallingCodex ? '取消中' : '取消 hook'}
-                </button>
-              </div>
-            </section>
-          </div>
+          <RuntimeSettings
+            onError={setError}
+            onNotice={showCopyNotice}
+            onStatusChange={setStatus}
+            status={status}
+          />
         ) : null}
 
         {activeView === 'sessions' ? (
@@ -1566,35 +1046,12 @@ export function App() {
         ) : null}
 
         {activeView === 'search' ? (
-          <section className="search-panel" aria-label="prompt 搜索">
-            <div className="section-heading">
-              <h3>搜索</h3>
-              <span>{searchLoading ? '搜索中' : `${searchResults.items.length} 条`}</span>
-            </div>
-            <div className="search-body">
-              <div className="search-row">
-                <input
-                  aria-label="搜索会话标题、prompt 和当前草稿"
-                  onChange={(event) => setSearchQuery(event.currentTarget.value)}
-                  placeholder="搜索会话标题、首条 prompt、已发送 prompt、当前草稿"
-                  type="search"
-                  value={searchQuery}
-                />
-                <label className="check-control">
-                  <input
-                    checked={hideLowInfo}
-                    onChange={(event) => setHideLowInfo(event.currentTarget.checked)}
-                    type="checkbox"
-                  />
-                  隐藏低信息
-                </label>
-              </div>
-              <SearchResultsList
-                items={searchResults.items}
-                onSelect={setSelectedSessionFromSearch}
-              />
-            </div>
-          </section>
+          <PromptSearch
+            hideLowInfo={hideLowInfo}
+            onHideLowInfoChange={setHideLowInfo}
+            onResultCountChange={setSearchResultCount}
+            onSelect={setSelectedSessionFromSearch}
+          />
         ) : null}
 
         {activeView === 'drafts' ? (
@@ -2068,218 +1525,6 @@ function ImageAttachmentStrip({
   );
 }
 
-function PromptHistoryList({
-  items,
-  onCopy,
-  onCopyAttachment,
-  onPreviewAttachment,
-}: {
-  items: PromptHistoryItem[];
-  onCopy: (item: PromptHistoryItem) => void;
-  onCopyAttachment: (attachment: PromptAttachment) => void;
-  onPreviewAttachment: (attachment: PromptAttachment, dataUrl: string) => void;
-}) {
-  if (!items.length) {
-    return (
-      <div className="history-empty">
-        <p>暂无已发送 prompt</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="history-list" aria-label="已发送 prompt 列表">
-      {items.map((item) => (
-        <article
-          className={item.isLowInfo ? 'prompt-card low-info copyable' : 'prompt-card copyable'}
-          key={item.id}
-          onClick={() => onCopy(item)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              onCopy(item);
-            }
-          }}
-          role="button"
-          tabIndex={0}
-          title="点击复制这条 prompt"
-        >
-          <header>
-            <span>{formatDateTime(item.sentAt)}</span>
-            <span>{item.isLowInfo ? '低信息' : item.matchedDraftId ? '匹配草稿' : '正式'}</span>
-          </header>
-          <HistoryAttachmentStrip
-            attachments={item.attachments}
-            onCopy={onCopyAttachment}
-            onPreview={onPreviewAttachment}
-          />
-          <pre>{item.promptMd}</pre>
-          <footer>
-            <span>hash {item.promptHash.slice(0, 12)}</span>
-            <span>
-              {item.attachments.length
-                ? `${item.attachments.length} 张图 · 点击卡片复制`
-                : '点击复制'}
-            </span>
-          </footer>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function HistoryAttachmentStrip({
-  attachments,
-  onCopy,
-  onPreview,
-}: {
-  attachments: PromptAttachment[];
-  onCopy: (attachment: PromptAttachment) => void;
-  onPreview: (attachment: PromptAttachment, dataUrl: string) => void;
-}) {
-  const [dataUrls, setDataUrls] = useState<Record<number, string>>({});
-
-  useEffect(() => {
-    let disposed = false;
-    attachments
-      .filter((attachment) => attachment.kind === 'image')
-      .forEach((attachment) => {
-        invoke<PromptAttachmentDataUrl>('read_prompt_attachment_data_url', {
-          attachmentId: attachment.id,
-        })
-          .then((image) => {
-            if (!disposed) {
-              setDataUrls((current) => ({ ...current, [image.id]: image.dataUrl }));
-            }
-          })
-          .catch(() => {
-            if (!disposed) {
-              setDataUrls((current) => ({ ...current, [attachment.id]: '' }));
-            }
-          });
-      });
-
-    return () => {
-      disposed = true;
-    };
-  }, [attachments]);
-
-  const imageAttachments = attachments.filter((attachment) => attachment.kind === 'image');
-  if (!imageAttachments.length) {
-    return null;
-  }
-
-  return (
-    <section className="history-attachment-strip" aria-label="历史 prompt 图片附件">
-      {imageAttachments.map((attachment) => (
-        <article
-          className="image-attachment history-image-attachment"
-          key={attachment.id}
-          onClick={(event) => {
-            event.stopPropagation();
-            const dataUrl = dataUrls[attachment.id];
-            if (dataUrl) {
-              onPreview(attachment, dataUrl);
-            }
-          }}
-          onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              const dataUrl = dataUrls[attachment.id];
-              if (dataUrl) {
-                onPreview(attachment, dataUrl);
-              }
-            }
-          }}
-          role="button"
-          tabIndex={0}
-          title={dataUrls[attachment.id] ? '点击放大图片' : '图片加载中'}
-        >
-          {dataUrls[attachment.id] ? (
-            <img
-              alt={attachment.placeholder ?? attachment.fileName}
-              src={dataUrls[attachment.id]}
-            />
-          ) : (
-            <div className="history-image-placeholder">图片</div>
-          )}
-          <span>{formatFileSize(attachment.fileSize)}</span>
-          <div className="image-hover-actions" aria-label="图片操作">
-            <button
-              aria-label="放大图片"
-              className="image-hover-button"
-              disabled={!dataUrls[attachment.id]}
-              onClick={(event) => {
-                event.stopPropagation();
-                const dataUrl = dataUrls[attachment.id];
-                if (dataUrl) {
-                  onPreview(attachment, dataUrl);
-                }
-              }}
-              title="放大"
-              type="button"
-            >
-              <ZoomInIcon />
-            </button>
-            <button
-              aria-label="复制图片到剪切板"
-              className="image-hover-button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onCopy(attachment);
-              }}
-              title="复制"
-              type="button"
-            >
-              <CopyIcon />
-            </button>
-          </div>
-        </article>
-      ))}
-    </section>
-  );
-}
-
-function SearchResultsList({
-  items,
-  onSelect,
-}: {
-  items: PromptSearchResultItem[];
-  onSelect: (item: PromptSearchResultItem) => void;
-}) {
-  if (!items.length) {
-    return (
-      <div className="history-empty">
-        <p>暂无搜索结果</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="search-results" aria-label="搜索结果列表">
-      {items.map((item, index) => (
-        <button
-          className={item.isLowInfo ? 'search-result low-info' : 'search-result'}
-          key={`${item.provider}:${item.sessionId}:${item.matchKind}:${index}`}
-          onClick={() => onSelect(item)}
-          type="button"
-        >
-          <span>
-            <strong>{item.title}</strong>
-            <small>
-              {item.matchLabel} · {item.providerLabel} · {item.shortSessionId} ·{' '}
-              {item.projectName}
-            </small>
-          </span>
-          <em>{item.snippet}</em>
-          <small>{formatDateTime(item.sentAt ?? item.updatedAt)}</small>
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function SessionTabs({
   emptyDescription,
   emptyTitle,
@@ -2487,7 +1732,7 @@ function historyPromptCopyText(item: PromptHistoryItem) {
     (attachment) => attachment.kind === 'image' && attachment.filePath,
   );
   if (!imageAttachments.length) {
-    return stripImagePlaceholders(item.promptMd);
+    return item.hasMissingImages ? item.promptMd.trim() : stripImagePlaceholders(item.promptMd);
   }
 
   let text = item.promptMd;
@@ -2546,28 +1791,6 @@ function menuBadge(
     return searchResultCount ? `${searchResultCount} 条` : '全局';
   }
   return status?.collectorReady ? '就绪' : '待检';
-}
-
-function configDraftFromStatus(status: AppStatus): RuntimeConfigDraft {
-  return {
-    localEndpoint: status.localEndpoint,
-    recordingPaused: status.recordingPaused,
-    maybeClosedAfterHours: String(status.maybeClosedAfterHours),
-    retainRawHookEvents: status.retainRawHookEvents,
-    rawHookEventsRetentionDays: String(status.rawHookEventsRetentionDays),
-    autostart: status.autostart,
-  };
-}
-
-function emptyConfigDraft(): RuntimeConfigDraft {
-  return {
-    localEndpoint: '127.0.0.1:9996',
-    recordingPaused: false,
-    maybeClosedAfterHours: '12',
-    retainRawHookEvents: true,
-    rawHookEventsRetentionDays: '7',
-    autostart: false,
-  };
 }
 
 function draftListPreview(content: string, fallbackPreview: string) {

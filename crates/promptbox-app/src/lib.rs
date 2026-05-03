@@ -1,20 +1,16 @@
 use promptbox_core::{
     clear_spool_events, parse_local_endpoint, read_spool_events, AppStatus, ArchiveSessionOutcome,
     ClaudeHookStatus, CodexHookStatus, DeleteSessionOutcome, DraftList, DraftState,
-    PromptAttachmentDataUrl, PromptBoxConfig, PromptEvent, PromptHistory, PromptSearchResults,
-    PromptStore, RuntimeState, SessionList, HOOK_EVENTS_PATH, MAX_HOOK_BODY_BYTES,
+    PromptAttachmentDataUrl, PromptBoxConfig, PromptHistory, PromptSearchResults, PromptStore,
+    RuntimeState, SessionList,
 };
 use std::{
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
     path::PathBuf,
     process::Command as ProcessCommand,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    thread,
-    time::Duration,
 };
 use tauri::{
     menu::{Menu, MenuItem},
@@ -22,9 +18,11 @@ use tauri::{
     Manager, PhysicalPosition, Runtime, WebviewWindow, WindowEvent,
 };
 
+mod collector;
+
 struct StartupState {
     status: Mutex<AppStatus>,
-    prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
+    collector_state: collector::CollectorState,
     recording_paused: Arc<AtomicBool>,
     store: Option<PromptStore>,
 }
@@ -42,8 +40,16 @@ fn current_app_status(state: &StartupState) -> AppStatus {
         .unwrap_or_else(|_| promptbox_core::app_status_from_error("应用状态锁已损坏".to_string()));
 
     status.recording_paused = state.recording_paused.load(Ordering::SeqCst);
-    if let Ok(events) = state.prompt_events.lock() {
-        status.received_prompt_events = events.len();
+    let collector_snapshot = state.collector_state.snapshot();
+    status.received_prompt_events =
+        status.imported_spool_events + collector_snapshot.received_prompt_events;
+    status.paused_prompt_events = collector_snapshot.paused_prompt_events;
+    if let Some(error) = collector_snapshot.recent_error {
+        status.collector_message = if status.collector_ready {
+            format!("{}；最近错误：{error}", status.collector_message)
+        } else {
+            error
+        };
     }
     if let Some(store) = &state.store {
         let maybe_closed_after_hours = status.maybe_closed_after_hours;
@@ -573,12 +579,12 @@ fn position_window_at_work_area_bottom_right<R: Runtime>(
 }
 
 fn initialize_startup_state() -> StartupState {
-    let prompt_events = Arc::new(Mutex::new(Vec::new()));
+    let collector_state = collector::CollectorState::new();
     let recording_paused = Arc::new(AtomicBool::new(false));
     let (status, store) = match promptbox_core::initialize_runtime() {
         Ok(runtime) => initialize_runtime_dependent_state(
             &runtime,
-            Arc::clone(&prompt_events),
+            collector_state.clone(),
             Arc::clone(&recording_paused),
         ),
         Err(error) => (promptbox_core::app_status_from_error(error), None),
@@ -587,7 +593,7 @@ fn initialize_startup_state() -> StartupState {
 
     StartupState {
         status: Mutex::new(status),
-        prompt_events,
+        collector_state,
         recording_paused,
         store,
     }
@@ -595,7 +601,7 @@ fn initialize_startup_state() -> StartupState {
 
 fn initialize_runtime_dependent_state(
     runtime: &RuntimeState,
-    prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
+    collector_state: collector::CollectorState,
     recording_paused: Arc<AtomicBool>,
 ) -> (AppStatus, Option<PromptStore>) {
     let mut status = runtime.app_status();
@@ -620,35 +626,24 @@ fn initialize_runtime_dependent_state(
         Ok(imported) => {
             let mut imported_count = 0;
             let mut import_failed = false;
-            match prompt_events.lock() {
-                Ok(mut events) => {
-                    for event in imported {
-                        match store.record_prompt_event(&event) {
-                            Ok(outcome) => {
-                                status.session_count = outcome.session_count;
-                                status.prompt_event_count = outcome.prompt_event_count;
-                                if outcome.inserted {
-                                    imported_count += 1;
-                                }
-                                events.push(event);
-                            }
-                            Err(error) => {
-                                status.startup_errors.push(error);
-                                import_failed = true;
-                                break;
-                            }
+            for event in imported {
+                match store.record_prompt_event(&event) {
+                    Ok(outcome) => {
+                        status.session_count = outcome.session_count;
+                        status.prompt_event_count = outcome.prompt_event_count;
+                        if outcome.inserted {
+                            imported_count += 1;
                         }
                     }
-                    status.received_prompt_events = events.len();
-                }
-                Err(_) => {
-                    status
-                        .startup_errors
-                        .push("采集缓冲区不可用，spool 暂未清理".to_string());
-                    import_failed = true;
+                    Err(error) => {
+                        status.startup_errors.push(error);
+                        import_failed = true;
+                        break;
+                    }
                 }
             }
             status.imported_spool_events = imported_count;
+            status.received_prompt_events = imported_count;
             if !import_failed {
                 if let Err(error) = clear_spool_events(&runtime.paths.spool_path) {
                     status.startup_errors.push(error);
@@ -660,12 +655,12 @@ fn initialize_runtime_dependent_state(
         }
     }
 
-    match start_local_collector(
+    match collector::start_local_collector(
         &runtime.config.local_endpoint,
         &runtime.config.token,
         store.clone(),
-        Arc::clone(&prompt_events),
         recording_paused,
+        collector_state.clone(),
     ) {
         Ok(message) => {
             status.collector_ready = true;
@@ -675,233 +670,9 @@ fn initialize_runtime_dependent_state(
             status.collector_ready = false;
             status.collector_message = error.clone();
             status.startup_errors.push(error);
+            collector_state.mark_startup_error(status.collector_message.clone());
         }
     }
 
     (status, Some(store))
-}
-
-fn start_local_collector(
-    endpoint: &str,
-    token: &str,
-    store: PromptStore,
-    prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
-    recording_paused: Arc<AtomicBool>,
-) -> Result<String, String> {
-    let addr = parse_local_endpoint(endpoint)?;
-    let listener = TcpListener::bind(addr)
-        .map_err(|error| format!("启动本地采集端点失败：{endpoint}：{error}"))?;
-    let local_addr = listener
-        .local_addr()
-        .map_err(|error| format!("读取本地采集端点地址失败：{error}"))?;
-    let token = token.to_string();
-
-    thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(stream) = stream else {
-                continue;
-            };
-            let token = token.clone();
-            let store = store.clone();
-            let prompt_events = Arc::clone(&prompt_events);
-            let recording_paused = Arc::clone(&recording_paused);
-
-            thread::spawn(move || {
-                handle_collector_connection(
-                    stream,
-                    &token,
-                    &store,
-                    prompt_events,
-                    recording_paused,
-                );
-            });
-        }
-    });
-
-    Ok(format!("本地采集端点已监听 http://{local_addr}"))
-}
-
-fn handle_collector_connection(
-    mut stream: TcpStream,
-    token: &str,
-    store: &PromptStore,
-    prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
-    recording_paused: Arc<AtomicBool>,
-) {
-    let response = match read_http_request(&mut stream) {
-        Ok(request) => process_hook_request(request, token, store, prompt_events, recording_paused),
-        Err(error) => HttpResponse::new(400, "Bad Request", error),
-    };
-
-    let _ = write_http_response(&mut stream, response);
-}
-
-fn process_hook_request(
-    request: HttpRequest,
-    token: &str,
-    store: &PromptStore,
-    prompt_events: Arc<Mutex<Vec<PromptEvent>>>,
-    recording_paused: Arc<AtomicBool>,
-) -> HttpResponse {
-    if request.method != "POST" || request.path != HOOK_EVENTS_PATH {
-        return HttpResponse::new(404, "Not Found", "未知采集路径".to_string());
-    }
-
-    let expected = format!("Bearer {token}");
-    if header_value(&request.headers, "authorization") != Some(expected.as_str()) {
-        return HttpResponse::new(401, "Unauthorized", "token 校验失败".to_string());
-    }
-
-    if recording_paused.load(Ordering::SeqCst) {
-        return HttpResponse::new(204, "No Content", String::new());
-    }
-
-    let event = match serde_json::from_slice::<PromptEvent>(&request.body) {
-        Ok(event) => event,
-        Err(error) => {
-            return HttpResponse::new(400, "Bad Request", format!("解析 hook 事件失败：{error}"));
-        }
-    };
-
-    if let Err(error) = store.record_prompt_event(&event) {
-        return HttpResponse::new(
-            500,
-            "Internal Server Error",
-            format!("写入正式历史失败：{error}"),
-        );
-    }
-
-    match prompt_events.lock() {
-        Ok(mut events) => events.push(event),
-        Err(_) => {
-            return HttpResponse::new(500, "Internal Server Error", "采集缓冲区不可用".to_string());
-        }
-    }
-
-    HttpResponse::new(204, "No Content", String::new())
-}
-
-fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .map_err(|error| format!("设置采集连接读取超时失败：{error}"))?;
-
-    let mut buffer = Vec::new();
-    let header_end = loop {
-        if let Some(position) = find_header_end(&buffer) {
-            break position;
-        }
-
-        if buffer.len() > 16 * 1024 {
-            return Err("HTTP 请求头超过限制".to_string());
-        }
-
-        let mut chunk = [0_u8; 1024];
-        let size = stream
-            .read(&mut chunk)
-            .map_err(|error| format!("读取采集请求失败：{error}"))?;
-        if size == 0 {
-            return Err("采集请求提前结束".to_string());
-        }
-        buffer.extend_from_slice(&chunk[..size]);
-    };
-
-    let body_start = header_end + 4;
-    let header_text = String::from_utf8(buffer[..header_end].to_vec())
-        .map_err(|error| format!("HTTP 请求头不是 UTF-8：{error}"))?;
-    let mut lines = header_text.lines();
-    let request_line = lines
-        .next()
-        .ok_or_else(|| "HTTP 请求缺少请求行".to_string())?;
-    let request_parts = request_line.split_whitespace().collect::<Vec<_>>();
-    if request_parts.len() < 2 {
-        return Err("HTTP 请求行格式不正确".to_string());
-    }
-
-    let mut headers = Vec::new();
-    for line in lines {
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        headers.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
-    }
-
-    let content_length = header_value(&headers, "content-length")
-        .ok_or_else(|| "采集请求缺少 Content-Length".to_string())?
-        .parse::<usize>()
-        .map_err(|error| format!("Content-Length 不是有效数字：{error}"))?;
-    if content_length > MAX_HOOK_BODY_BYTES {
-        return Err(format!(
-            "采集请求体超过限制：{content_length} bytes，大于 {MAX_HOOK_BODY_BYTES} bytes"
-        ));
-    }
-
-    let mut body = buffer[body_start..].to_vec();
-    while body.len() < content_length {
-        let mut chunk = [0_u8; 4096];
-        let size = stream
-            .read(&mut chunk)
-            .map_err(|error| format!("读取采集请求体失败：{error}"))?;
-        if size == 0 {
-            return Err("采集请求体提前结束".to_string());
-        }
-        body.extend_from_slice(&chunk[..size]);
-    }
-    body.truncate(content_length);
-
-    Ok(HttpRequest {
-        method: request_parts[0].to_string(),
-        path: request_parts[1].to_string(),
-        headers,
-        body,
-    })
-}
-
-fn write_http_response(stream: &mut TcpStream, response: HttpResponse) -> Result<(), String> {
-    let body = response.body.as_bytes();
-    let headers = format!(
-        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n",
-        response.status,
-        response.reason,
-        body.len()
-    );
-
-    stream
-        .write_all(headers.as_bytes())
-        .and_then(|_| stream.write_all(body))
-        .map_err(|error| format!("写入采集响应失败：{error}"))
-}
-
-fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    headers
-        .iter()
-        .find(|(candidate, _)| candidate == name)
-        .map(|(_, value)| value.as_str())
-}
-
-fn find_header_end(buffer: &[u8]) -> Option<usize> {
-    buffer.windows(4).position(|window| window == b"\r\n\r\n")
-}
-
-struct HttpRequest {
-    method: String,
-    path: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
-}
-
-struct HttpResponse {
-    status: u16,
-    reason: &'static str,
-    body: String,
-}
-
-impl HttpResponse {
-    fn new(status: u16, reason: &'static str, body: String) -> Self {
-        Self {
-            status,
-            reason,
-            body,
-        }
-    }
 }

@@ -1,14 +1,16 @@
-use crate::{current_captured_at, PromptEvent, Provider};
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use crate::{current_captured_at, PromptEvent};
 use chrono::{Duration, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    env, fs,
+    fs,
     path::{Path, PathBuf},
 };
+
+mod attachments;
+
+pub use attachments::{PromptAttachment, PromptAttachmentDataUrl};
 
 #[derive(Debug, Clone)]
 pub struct PromptStore {
@@ -165,7 +167,6 @@ impl PromptStore {
             provider,
             session_id,
             include_low_info,
-            &self.attachment_root(),
         )
     }
 
@@ -175,7 +176,7 @@ impl PromptStore {
     ) -> Result<PromptAttachmentDataUrl, String> {
         let connection = self.open_connection()?;
         migrate(&connection)?;
-        read_prompt_attachment_data_url(&connection, attachment_id)
+        attachments::read_prompt_attachment_data_url(&connection, attachment_id)
     }
 
     pub fn search_prompts(
@@ -330,28 +331,10 @@ pub struct PromptHistoryItem {
     pub matched_draft_id: Option<i64>,
     pub sent_at: String,
     pub created_at: String,
+    pub expected_image_count: usize,
+    pub captured_image_count: usize,
+    pub has_missing_images: bool,
     pub attachments: Vec<PromptAttachment>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PromptAttachment {
-    pub id: i64,
-    pub kind: String,
-    pub mime_type: String,
-    pub file_path: String,
-    pub file_name: String,
-    pub file_size: i64,
-    pub placeholder: Option<String>,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PromptAttachmentDataUrl {
-    pub id: i64,
-    pub mime_type: String,
-    pub data_url: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -528,9 +511,10 @@ fn record_prompt_event(
         return ignored(connection, "忽略没有用户 prompt 内容的事件".to_string());
     };
 
+    let prompt = prompt.to_string();
     let now = current_captured_at();
     let provider = event.provider.as_str();
-    let title = title_from_prompt(prompt, &event.session_id);
+    let title = title_from_prompt(&prompt, &event.session_id);
     let title_source = if title == short_session_title(&event.session_id) {
         "session_id"
     } else {
@@ -538,116 +522,146 @@ fn record_prompt_event(
     };
 
     connection
-        .execute(
-            r#"
-            insert into sessions (
-              provider, session_id, status, cwd, transcript_path, model,
-              first_prompt, title, title_source, last_hook_at, created_at, updated_at
-            )
-            values (?1, ?2, 'active', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
-            on conflict(provider, session_id) do update set
-              status = 'active',
-              cwd = coalesce(excluded.cwd, sessions.cwd),
-              transcript_path = coalesce(excluded.transcript_path, sessions.transcript_path),
-              model = coalesce(excluded.model, sessions.model),
-              first_prompt = coalesce(sessions.first_prompt, excluded.first_prompt),
-              title = case
-                when sessions.title_source in ('session_id', 'first_non_low_info_prompt')
-                  and sessions.first_prompt is null
-                then excluded.title
-                else sessions.title
-              end,
-              title_source = case
-                when sessions.title_source in ('session_id', 'first_non_low_info_prompt')
-                  and sessions.first_prompt is null
-                then excluded.title_source
-                else sessions.title_source
-              end,
-              last_hook_at = excluded.last_hook_at,
-              maybe_closed_at = null,
-              archived_at = null,
-              updated_at = excluded.updated_at
-            "#,
-            params![
-                provider,
-                event.session_id,
-                event.cwd,
-                event.transcript_path,
-                event.model,
-                prompt,
-                title,
-                title_source,
-                event.captured_at,
-                now,
-            ],
-        )
-        .map_err(|error| format!("写入 Agent 会话失败：{error}"))?;
+        .execute_batch("begin immediate")
+        .map_err(|error| format!("开启已发送 prompt 入库事务失败：{error}"))?;
 
-    let session_db_id = session_db_id(connection, provider, &event.session_id)?;
-    let prompt_hash = prompt_hash(prompt);
-    let inserted = connection
-        .execute(
-            r#"
-            insert or ignore into prompt_events (
-              session_db_id, provider, session_id, turn_id, prompt_md, prompt_hash,
-              is_low_info, source, sent_at, created_at
-            )
-            values (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'hook', ?8, ?9)
-            "#,
-            params![
-                session_db_id,
-                provider,
-                event.session_id,
-                event.turn_id,
-                prompt,
-                prompt_hash,
-                if is_low_info_prompt(prompt) {
-                    1_i64
-                } else {
-                    0_i64
-                },
-                event.captured_at,
-                now,
-            ],
-        )
-        .map_err(|error| format!("写入已发送 prompt 失败：{error}"))?
-        > 0;
-
-    if inserted {
-        let prompt_event_id = connection.last_insert_rowid();
-        if let Some(matched_draft_id) = clear_matching_copied_draft(
-            connection,
-            session_db_id,
-            &prompt_hash,
-            &now,
-            prompt_event_id,
-        )? {
-            connection
-                .execute(
-                    "update prompt_events set matched_draft_id = ?1 where id = ?2",
-                    params![matched_draft_id, prompt_event_id],
+    let transaction_result = (|| {
+        connection
+            .execute(
+                r#"
+                insert into sessions (
+                  provider, session_id, status, cwd, transcript_path, model,
+                  first_prompt, title, title_source, last_hook_at, created_at, updated_at
                 )
-                .map_err(|error| format!("标记已发送 prompt 匹配草稿失败：{error}"))?;
-        }
-        if let Err(error) = store_prompt_event_attachments(
-            connection,
-            event,
-            prompt,
+                values (?1, ?2, 'active', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+                on conflict(provider, session_id) do update set
+                  status = 'active',
+                  cwd = coalesce(excluded.cwd, sessions.cwd),
+                  transcript_path = coalesce(excluded.transcript_path, sessions.transcript_path),
+                  model = coalesce(excluded.model, sessions.model),
+                  first_prompt = coalesce(sessions.first_prompt, excluded.first_prompt),
+                  title = case
+                    when sessions.title_source in ('session_id', 'first_non_low_info_prompt')
+                      and sessions.first_prompt is null
+                    then excluded.title
+                    else sessions.title
+                  end,
+                  title_source = case
+                    when sessions.title_source in ('session_id', 'first_non_low_info_prompt')
+                      and sessions.first_prompt is null
+                    then excluded.title_source
+                    else sessions.title_source
+                  end,
+                  last_hook_at = excluded.last_hook_at,
+                  maybe_closed_at = null,
+                  archived_at = null,
+                  updated_at = excluded.updated_at
+                "#,
+                params![
+                    provider,
+                    &event.session_id,
+                    event.cwd.as_deref(),
+                    event.transcript_path.as_deref(),
+                    event.model.as_deref(),
+                    prompt.as_str(),
+                    title.as_str(),
+                    title_source,
+                    event.captured_at.as_str(),
+                    now.as_str(),
+                ],
+            )
+            .map_err(|error| format!("写入 Agent 会话失败：{error}"))?;
+
+        let session_db_id = session_db_id(connection, provider, &event.session_id)?;
+        let prompt_hash = prompt_hash(&prompt);
+        let inserted = connection
+            .execute(
+                r#"
+                insert or ignore into prompt_events (
+                  session_db_id, provider, session_id, turn_id, prompt_md, prompt_hash,
+                  is_low_info, source, sent_at, created_at
+                )
+                values (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'hook', ?8, ?9)
+                "#,
+                params![
+                    session_db_id,
+                    provider,
+                    &event.session_id,
+                    event.turn_id.as_deref(),
+                    prompt.as_str(),
+                    prompt_hash.as_str(),
+                    if is_low_info_prompt(&prompt) {
+                        1_i64
+                    } else {
+                        0_i64
+                    },
+                    event.captured_at.as_str(),
+                    now.as_str(),
+                ],
+            )
+            .map_err(|error| format!("写入已发送 prompt 失败：{error}"))?
+            > 0;
+
+        let prompt_event_id = if inserted {
+            let prompt_event_id = connection.last_insert_rowid();
+            if let Some(matched_draft_id) = clear_matching_copied_draft(
+                connection,
+                session_db_id,
+                &prompt_hash,
+                &now,
+                prompt_event_id,
+            )? {
+                connection
+                    .execute(
+                        "update prompt_events set matched_draft_id = ?1 where id = ?2",
+                        params![matched_draft_id, prompt_event_id],
+                    )
+                    .map_err(|error| format!("标记已发送 prompt 匹配草稿失败：{error}"))?;
+            }
+            Some(prompt_event_id)
+        } else {
+            None
+        };
+
+        let summary = store_summary(connection)?;
+        Ok((
+            RecordOutcome {
+                inserted,
+                ignored_reason: (!inserted).then_some("重复 turn_id，已忽略".to_string()),
+                session_count: summary.session_count,
+                prompt_event_count: summary.prompt_event_count,
+            },
             prompt_event_id,
-            attachment_root,
-            &now,
-        ) {
-            eprintln!("提取 prompt 图片附件失败：{error}");
+        ))
+    })();
+
+    match transaction_result {
+        Ok((outcome, prompt_event_id)) => {
+            if let Err(error) = connection.execute_batch("commit") {
+                let _ = connection.execute_batch("rollback");
+                return Err(format!("提交已发送 prompt 入库事务失败：{error}"));
+            }
+
+            if let Some(prompt_event_id) = prompt_event_id {
+                if let Err(error) = attachments::store_prompt_event_attachments(
+                    connection,
+                    event,
+                    &prompt,
+                    prompt_event_id,
+                    attachment_root,
+                    &now,
+                ) {
+                    eprintln!("提取 prompt 图片附件失败：{error}");
+                }
+            }
+
+            Ok(outcome)
+        }
+        Err(error) => {
+            let _ = connection.execute_batch("rollback");
+            Err(error)
         }
     }
-
-    let summary = store_summary(connection)?;
-    Ok(RecordOutcome {
-        inserted,
-        ignored_reason: (!inserted).then_some("重复 turn_id，已忽略".to_string()),
-        session_count: summary.session_count,
-        prompt_event_count: summary.prompt_event_count,
-    })
 }
 
 fn ignored(connection: &Connection, reason: String) -> Result<RecordOutcome, String> {
@@ -658,445 +672,6 @@ fn ignored(connection: &Connection, reason: String) -> Result<RecordOutcome, Str
         session_count: summary.session_count,
         prompt_event_count: summary.prompt_event_count,
     })
-}
-
-#[derive(Debug)]
-struct ExtractedPromptImage {
-    mime_type: String,
-    bytes: Vec<u8>,
-    source: String,
-}
-
-fn store_prompt_event_attachments(
-    connection: &Connection,
-    event: &PromptEvent,
-    prompt: &str,
-    prompt_event_id: i64,
-    attachment_root: &Path,
-    created_at: &str,
-) -> Result<(), String> {
-    let images = extract_prompt_images(event, prompt)?;
-    if images.is_empty() {
-        return Ok(());
-    }
-
-    let provider = event.provider.as_str();
-    let session_segment = sanitize_path_segment(&event.session_id);
-    let attachment_dir = attachment_root.join(provider).join(session_segment);
-    fs::create_dir_all(&attachment_dir).map_err(|error| {
-        format!(
-            "创建 prompt 图片附件目录失败：{}：{error}",
-            attachment_dir.display()
-        )
-    })?;
-
-    for (index, image) in images.into_iter().enumerate() {
-        let position = (index + 1) as i64;
-        let extension = extension_from_mime_type(&image.mime_type);
-        let file_name = format!("{prompt_event_id}-{position}.{extension}");
-        let file_path = attachment_dir.join(&file_name);
-        fs::write(&file_path, &image.bytes).map_err(|error| {
-            format!("写入 prompt 图片附件失败：{}：{error}", file_path.display())
-        })?;
-        let file_size = i64::try_from(image.bytes.len()).unwrap_or(i64::MAX);
-        let file_path_text = file_path.to_string_lossy().into_owned();
-        let placeholder = image_placeholder(prompt, position as usize);
-
-        connection
-            .execute(
-                r#"
-                insert or ignore into prompt_event_attachments (
-                  prompt_event_id, provider, session_id, kind, mime_type,
-                  file_path, file_name, file_size, placeholder, source, position, created_at
-                )
-                values (?1, ?2, ?3, 'image', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-                "#,
-                params![
-                    prompt_event_id,
-                    provider,
-                    event.session_id,
-                    image.mime_type,
-                    file_path_text,
-                    file_name,
-                    file_size,
-                    placeholder,
-                    image.source,
-                    position,
-                    created_at,
-                ],
-            )
-            .map_err(|error| format!("写入 prompt 图片附件记录失败：{error}"))?;
-    }
-
-    Ok(())
-}
-
-fn extract_prompt_images(
-    event: &PromptEvent,
-    prompt: &str,
-) -> Result<Vec<ExtractedPromptImage>, String> {
-    if !prompt_may_have_image(prompt) && !json_may_have_image(&event.raw_json) {
-        return Ok(Vec::new());
-    }
-
-    let mut images = extract_images_from_json_value(&event.raw_json, prompt, "hook_raw_json");
-    if !images.is_empty() {
-        return Ok(images);
-    }
-
-    for transcript_path in prompt_transcript_paths(event) {
-        images = extract_images_from_transcript(&transcript_path, prompt)?;
-        if !images.is_empty() {
-            return Ok(images);
-        }
-    }
-
-    Ok(Vec::new())
-}
-
-fn prompt_transcript_paths(event: &PromptEvent) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Some(transcript_path) = event.transcript_path.as_deref() {
-        paths.push(PathBuf::from(transcript_path));
-    }
-    if event.provider == Provider::Codex {
-        paths.extend(find_codex_transcript_paths(&event.session_id));
-    }
-
-    let mut unique_paths = Vec::new();
-    for path in paths {
-        let key = path.to_string_lossy().to_ascii_lowercase();
-        if unique_paths
-            .iter()
-            .any(|existing: &PathBuf| existing.to_string_lossy().to_ascii_lowercase() == key)
-        {
-            continue;
-        }
-        unique_paths.push(path);
-    }
-
-    unique_paths
-}
-
-fn extract_images_from_transcript(
-    transcript_path: &Path,
-    prompt: &str,
-) -> Result<Vec<ExtractedPromptImage>, String> {
-    if !transcript_path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let raw = fs::read_to_string(transcript_path).map_err(|error| {
-        format!(
-            "读取 Agent transcript 失败：{}：{error}",
-            transcript_path.display()
-        )
-    })?;
-    let source = format!("transcript:{}", transcript_path.display());
-
-    for line in raw.lines().rev() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let images = extract_images_from_json_value(&value, prompt, &source);
-        if !images.is_empty() {
-            return Ok(images);
-        }
-    }
-
-    Ok(Vec::new())
-}
-
-fn extract_images_from_json_value(
-    value: &Value,
-    prompt: &str,
-    source: &str,
-) -> Vec<ExtractedPromptImage> {
-    let mut images = Vec::new();
-    collect_images_from_json_value(value, prompt, source, false, &mut images);
-    images
-}
-
-fn collect_images_from_json_value(
-    value: &Value,
-    prompt: &str,
-    source: &str,
-    user_context: bool,
-    images: &mut Vec<ExtractedPromptImage>,
-) {
-    match value {
-        Value::Object(map) => {
-            let next_user_context = user_context || object_is_user_message(value);
-            if let Some(content) = map.get("content").and_then(Value::as_array) {
-                if next_user_context && content_matches_prompt(content, prompt) {
-                    append_images_from_content(content, source, images);
-                }
-            }
-            for child in map.values() {
-                collect_images_from_json_value(child, prompt, source, next_user_context, images);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_images_from_json_value(item, prompt, source, user_context, images);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn object_is_user_message(value: &Value) -> bool {
-    string_value_at(value, &["role"]).is_some_and(is_user_marker)
-        || string_value_at(value, &["type"]).is_some_and(is_user_marker)
-        || string_value_at(value, &["message", "role"]).is_some_and(is_user_marker)
-        || string_value_at(value, &["message", "type"]).is_some_and(is_user_marker)
-        || string_value_at(value, &["payload", "role"]).is_some_and(is_user_marker)
-        || string_value_at(value, &["payload", "type"]).is_some_and(is_user_marker)
-}
-
-fn is_user_marker(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "user" | "user_message" | "input"
-    )
-}
-
-fn string_value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
-    let mut current = value;
-    for key in path {
-        current = current.get(*key)?;
-    }
-    current.as_str()
-}
-
-fn content_matches_prompt(content: &[Value], prompt: &str) -> bool {
-    let prompt = normalize_prompt_for_match(prompt);
-    if prompt.is_empty() {
-        return false;
-    }
-
-    let texts = content
-        .iter()
-        .filter_map(content_text)
-        .map(normalize_prompt_for_match)
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>();
-
-    if texts.iter().any(|text| text == &prompt) {
-        return true;
-    }
-
-    let joined = normalize_prompt_for_match(&texts.join("\n"));
-    joined == prompt
-}
-
-fn content_text(value: &Value) -> Option<&str> {
-    match value {
-        Value::String(text) => Some(text),
-        Value::Object(map) => map
-            .get("text")
-            .and_then(Value::as_str)
-            .or_else(|| map.get("input_text").and_then(Value::as_str)),
-        _ => None,
-    }
-}
-
-fn append_images_from_content(
-    content: &[Value],
-    source: &str,
-    images: &mut Vec<ExtractedPromptImage>,
-) {
-    for item in content {
-        if let Some((mime_type, bytes)) = image_bytes_from_content_item(item) {
-            images.push(ExtractedPromptImage {
-                mime_type,
-                bytes,
-                source: source.to_string(),
-            });
-        }
-    }
-}
-
-fn image_bytes_from_content_item(value: &Value) -> Option<(String, Vec<u8>)> {
-    let object = value.as_object()?;
-
-    if let Some(image_url) = object.get("image_url").and_then(Value::as_str) {
-        if let Some(decoded) = decode_image_data_url(image_url) {
-            return Some(decoded);
-        }
-    }
-
-    if let Some(source) = object.get("source").and_then(Value::as_object) {
-        let data = source.get("data").and_then(Value::as_str)?;
-        let mime_type = source
-            .get("media_type")
-            .and_then(Value::as_str)
-            .or_else(|| source.get("mime_type").and_then(Value::as_str))
-            .unwrap_or("image/png");
-        return decode_base64_image(mime_type, data);
-    }
-
-    if let Some(data) = object.get("data").and_then(Value::as_str) {
-        let mime_type = object
-            .get("media_type")
-            .and_then(Value::as_str)
-            .or_else(|| object.get("mime_type").and_then(Value::as_str))
-            .unwrap_or("image/png");
-        return decode_base64_image(mime_type, data);
-    }
-
-    None
-}
-
-fn decode_image_data_url(value: &str) -> Option<(String, Vec<u8>)> {
-    let (metadata, data) = value.split_once(',')?;
-    let metadata = metadata.trim();
-    if !metadata.starts_with("data:") || !metadata.ends_with(";base64") {
-        return None;
-    }
-
-    let mime_type = metadata
-        .trim_start_matches("data:")
-        .trim_end_matches(";base64")
-        .split(';')
-        .next()
-        .unwrap_or("image/png")
-        .trim();
-    decode_base64_image(mime_type, data)
-}
-
-fn decode_base64_image(mime_type: &str, data: &str) -> Option<(String, Vec<u8>)> {
-    let mime_type = normalize_image_mime_type(mime_type);
-    if !mime_type.starts_with("image/") {
-        return None;
-    }
-    let normalized_data = data
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect::<String>();
-    let bytes = BASE64_STANDARD.decode(normalized_data).ok()?;
-    if bytes.is_empty() {
-        return None;
-    }
-
-    Some((mime_type, bytes))
-}
-
-fn normalize_image_mime_type(value: &str) -> String {
-    let normalized = value
-        .trim()
-        .split(';')
-        .next()
-        .unwrap_or("image/png")
-        .to_ascii_lowercase();
-    if normalized.starts_with("image/") {
-        normalized
-    } else {
-        "image/png".to_string()
-    }
-}
-
-fn normalize_prompt_for_match(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn prompt_may_have_image(prompt: &str) -> bool {
-    prompt.contains("[Image #") || prompt.contains("[图片 #")
-}
-
-fn json_may_have_image(value: &Value) -> bool {
-    match value {
-        Value::String(text) => text.starts_with("data:image/"),
-        Value::Object(map) => map.iter().any(|(key, value)| {
-            matches!(
-                key.as_str(),
-                "image_url" | "media_type" | "mime_type" | "source"
-            ) || json_may_have_image(value)
-        }),
-        Value::Array(items) => items.iter().any(json_may_have_image),
-        _ => false,
-    }
-}
-
-fn find_codex_transcript_paths(session_id: &str) -> Vec<PathBuf> {
-    let Some(home) = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")) else {
-        return Vec::new();
-    };
-    let sessions_dir = PathBuf::from(home).join(".codex").join("sessions");
-    let mut paths = Vec::new();
-    collect_codex_transcript_paths(&sessions_dir, session_id, &mut paths, 0);
-    paths.sort();
-    paths.reverse();
-    paths.truncate(8);
-    paths
-}
-
-fn collect_codex_transcript_paths(
-    dir: &Path,
-    session_id: &str,
-    paths: &mut Vec<PathBuf>,
-    depth: usize,
-) {
-    if depth > 8 || paths.len() >= 24 {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_codex_transcript_paths(&path, session_id, paths, depth + 1);
-            continue;
-        }
-
-        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if file_name.contains(session_id) && file_name.ends_with(".jsonl") {
-            paths.push(path);
-        }
-    }
-}
-
-fn sanitize_path_segment(value: &str) -> String {
-    let sanitized = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-
-    if sanitized.is_empty() {
-        "unknown-session".to_string()
-    } else {
-        sanitized
-    }
-}
-
-fn image_placeholder(prompt: &str, position: usize) -> Option<String> {
-    let placeholder = format!("[Image #{position}]");
-    prompt.contains(&placeholder).then_some(placeholder)
-}
-
-fn extension_from_mime_type(mime_type: &str) -> &'static str {
-    match mime_type.trim().to_ascii_lowercase().as_str() {
-        "image/jpeg" | "image/jpg" => "jpg",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/bmp" => "bmp",
-        "image/svg+xml" => "svg",
-        _ => "png",
-    }
 }
 
 fn store_summary(connection: &Connection) -> Result<StoreSummary, String> {
@@ -1639,7 +1214,6 @@ fn list_prompt_history(
     provider: &str,
     session_id: &str,
     include_low_info: bool,
-    attachment_root: &Path,
 ) -> Result<PromptHistory, String> {
     let session_db_id = session_db_id(connection, provider, session_id)?;
     let mut statement = connection
@@ -1667,6 +1241,9 @@ fn list_prompt_history(
                     matched_draft_id: row.get(4)?,
                     sent_at: row.get(5)?,
                     created_at: row.get(6)?,
+                    expected_image_count: 0,
+                    captured_image_count: 0,
+                    has_missing_images: false,
                     attachments: Vec::new(),
                 })
             },
@@ -1676,155 +1253,12 @@ fn list_prompt_history(
     for row in rows {
         items.push(row.map_err(|error| format!("解析 prompt 历史失败：{error}"))?);
     }
-    backfill_missing_prompt_attachments(connection, provider, session_id, &items, attachment_root)?;
-    append_prompt_history_attachments(connection, &mut items)?;
+    attachments::append_prompt_history_attachments(connection, &mut items)?;
 
     Ok(PromptHistory {
         provider: provider.to_string(),
         session_id: session_id.to_string(),
         items,
-    })
-}
-
-fn backfill_missing_prompt_attachments(
-    connection: &Connection,
-    provider: &str,
-    session_id: &str,
-    items: &[PromptHistoryItem],
-    attachment_root: &Path,
-) -> Result<(), String> {
-    if !items
-        .iter()
-        .any(|item| prompt_may_have_image(&item.prompt_md))
-    {
-        return Ok(());
-    }
-
-    let transcript_path = connection
-        .query_row(
-            r#"
-            select transcript_path
-            from sessions
-            where provider = ?1 and session_id = ?2
-            "#,
-            params![provider, session_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(|error| format!("读取会话 transcript 路径失败：{error}"))?
-        .flatten();
-    let provider = Provider::parse(provider)?;
-
-    let mut count_statement = connection
-        .prepare("select count(*) from prompt_event_attachments where prompt_event_id = ?1")
-        .map_err(|error| format!("准备检查 prompt 图片附件失败：{error}"))?;
-
-    for item in items {
-        if !prompt_may_have_image(&item.prompt_md) {
-            continue;
-        }
-        let attachment_count = count_statement
-            .query_row(params![item.id], |row| row.get::<_, i64>(0))
-            .map_err(|error| format!("检查 prompt 图片附件失败：{error}"))?;
-        if attachment_count > 0 {
-            continue;
-        }
-
-        let event = PromptEvent {
-            provider,
-            event_name: "UserPromptSubmit".to_string(),
-            session_id: session_id.to_string(),
-            turn_id: None,
-            cwd: None,
-            transcript_path: transcript_path.clone(),
-            model: None,
-            prompt: Some(item.prompt_md.clone()),
-            captured_at: item.sent_at.clone(),
-            raw_json: Value::Null,
-        };
-
-        if let Err(error) = store_prompt_event_attachments(
-            connection,
-            &event,
-            &item.prompt_md,
-            item.id,
-            attachment_root,
-            &item.created_at,
-        ) {
-            eprintln!("回填 prompt 图片附件失败：{error}");
-        }
-    }
-
-    Ok(())
-}
-
-fn append_prompt_history_attachments(
-    connection: &Connection,
-    items: &mut [PromptHistoryItem],
-) -> Result<(), String> {
-    let mut statement = connection
-        .prepare(
-            r#"
-            select id, kind, mime_type, file_path, file_name, file_size, placeholder, created_at
-            from prompt_event_attachments
-            where prompt_event_id = ?1
-            order by position asc, id asc
-            "#,
-        )
-        .map_err(|error| format!("准备读取 prompt 图片附件失败：{error}"))?;
-
-    for item in items {
-        let rows = statement
-            .query_map(params![item.id], |row| {
-                Ok(PromptAttachment {
-                    id: row.get(0)?,
-                    kind: row.get(1)?,
-                    mime_type: row.get(2)?,
-                    file_path: row.get(3)?,
-                    file_name: row.get(4)?,
-                    file_size: row.get(5)?,
-                    placeholder: row.get(6)?,
-                    created_at: row.get(7)?,
-                })
-            })
-            .map_err(|error| format!("读取 prompt 图片附件失败：{error}"))?;
-
-        let mut attachments = Vec::new();
-        for row in rows {
-            attachments.push(row.map_err(|error| format!("解析 prompt 图片附件失败：{error}"))?);
-        }
-        item.attachments = attachments;
-    }
-
-    Ok(())
-}
-
-fn read_prompt_attachment_data_url(
-    connection: &Connection,
-    attachment_id: i64,
-) -> Result<PromptAttachmentDataUrl, String> {
-    let (mime_type, file_path): (String, String) = connection
-        .query_row(
-            r#"
-            select mime_type, file_path
-            from prompt_event_attachments
-            where id = ?1
-            "#,
-            params![attachment_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .map_err(|error| format!("读取 prompt 图片附件记录失败：{error}"))?
-        .ok_or_else(|| format!("prompt 图片附件不存在：{attachment_id}"))?;
-
-    let bytes = fs::read(&file_path)
-        .map_err(|error| format!("读取 prompt 图片附件文件失败：{file_path}：{error}"))?;
-    let encoded = BASE64_STANDARD.encode(bytes);
-
-    Ok(PromptAttachmentDataUrl {
-        id: attachment_id,
-        mime_type: mime_type.clone(),
-        data_url: format!("data:{mime_type};base64,{encoded}"),
     })
 }
 
@@ -2158,7 +1592,7 @@ fn delete_session(
     attachment_root: &Path,
 ) -> Result<DeleteSessionOutcome, String> {
     let session_db_id = session_db_id(connection, provider, session_id)?;
-    let attachment_files = session_attachment_files(connection, session_db_id)?;
+    let attachment_files = attachments::session_attachment_files(connection, session_db_id)?;
     let prompt_events_deleted = count_session_rows(connection, "prompt_events", session_db_id)?;
     let drafts_deleted = count_session_rows(connection, "draft_items", session_db_id)?
         + count_session_rows(connection, "drafts", session_db_id)?;
@@ -2221,33 +1655,6 @@ fn delete_session(
         message: "已删除 PromptHarbor 本地会话记录；不会删除 Claude Code 或 Codex CLI 原始会话文件"
             .to_string(),
     })
-}
-
-fn session_attachment_files(
-    connection: &Connection,
-    session_db_id: i64,
-) -> Result<Vec<PathBuf>, String> {
-    let mut statement = connection
-        .prepare(
-            r#"
-            select distinct prompt_event_attachments.file_path
-            from prompt_event_attachments
-            join prompt_events on prompt_events.id = prompt_event_attachments.prompt_event_id
-            where prompt_events.session_db_id = ?1
-            "#,
-        )
-        .map_err(|error| format!("准备读取会话附件文件失败：{error}"))?;
-    let rows = statement
-        .query_map(params![session_db_id], |row| row.get::<_, String>(0))
-        .map_err(|error| format!("读取会话附件文件失败：{error}"))?;
-
-    let mut files = Vec::new();
-    for row in rows {
-        files.push(PathBuf::from(
-            row.map_err(|error| format!("解析会话附件文件失败：{error}"))?,
-        ));
-    }
-    Ok(files)
 }
 
 fn remove_prompt_attachment_file(file_path: &Path, attachment_root: &Path) -> Result<bool, String> {

@@ -44,6 +44,7 @@ pub struct AppStatus {
     pub collector_message: String,
     pub imported_spool_events: usize,
     pub received_prompt_events: usize,
+    pub paused_prompt_events: usize,
     pub startup_errors: Vec<String>,
 }
 
@@ -306,6 +307,7 @@ impl RuntimeState {
             collector_message: "本地采集端点尚未启动".to_string(),
             imported_spool_events: 0,
             received_prompt_events: 0,
+            paused_prompt_events: 0,
             startup_errors: self.startup_errors.clone(),
         }
     }
@@ -341,6 +343,7 @@ pub fn app_status_from_error(error: String) -> AppStatus {
         collector_message: "本地采集端点未启动".to_string(),
         imported_spool_events: 0,
         received_prompt_events: 0,
+        paused_prompt_events: 0,
         startup_errors: vec![error],
     }
 }
