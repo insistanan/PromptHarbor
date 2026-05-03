@@ -1,0 +1,106 @@
+name: build-desktop-artifacts
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-portable
+            platform: windows-latest
+            build_args: --no-bundle
+            artifact_name: windows-portable-exe
+            artifact_path: |
+              target/release/promptbox-app.exe
+              target/release/promptbox-hook.exe
+          - name: linux-bundles
+            platform: ubuntu-22.04
+            build_args: --bundles deb,appimage
+            artifact_name: linux-bundles
+            artifact_path: |
+              target/release/bundle/deb/*.deb
+              target/release/bundle/appimage/*.AppImage
+              target/release/promptbox-hook
+          - name: macos-universal
+            platform: macos-latest
+            build_args: --target universal-apple-darwin --bundles app,dmg
+            artifact_name: macos-universal-bundles
+            artifact_path: |
+              target/universal-apple-darwin/release/bundle/macos/*.app
+              target/universal-apple-darwin/release/bundle/dmg/*.dmg
+              crates/promptbox-app/resources/promptbox-hook
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Build hook binary
+        if: matrix.platform != 'macos-latest'
+        run: cargo build --release --package promptbox-hook
+
+      - name: Prepare hook resource on Windows
+        if: matrix.platform == 'windows-latest'
+        run: |
+          New-Item -ItemType Directory -Force -Path crates/promptbox-app/resources
+          Copy-Item -Force target/release/promptbox-hook.exe crates/promptbox-app/resources/promptbox-hook.exe
+
+      - name: Prepare hook resource on Linux
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          mkdir -p crates/promptbox-app/resources
+          cp target/release/promptbox-hook crates/promptbox-app/resources/promptbox-hook
+          chmod +x crates/promptbox-app/resources/promptbox-hook
+
+      - name: Build universal hook resource on macOS
+        if: matrix.platform == 'macos-latest'
+        run: |
+          cargo build --release --package promptbox-hook --target aarch64-apple-darwin
+          cargo build --release --package promptbox-hook --target x86_64-apple-darwin
+          mkdir -p crates/promptbox-app/resources
+          lipo -create -output crates/promptbox-app/resources/promptbox-hook target/aarch64-apple-darwin/release/promptbox-hook target/x86_64-apple-darwin/release/promptbox-hook
+          chmod +x crates/promptbox-app/resources/promptbox-hook
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --locked --version "^2"
+
+      - name: Build desktop artifacts
+        working-directory: crates/promptbox-app
+        run: cargo tauri build ${{ matrix.build_args }}
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error

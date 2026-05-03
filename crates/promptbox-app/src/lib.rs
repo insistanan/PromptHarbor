@@ -16,6 +16,7 @@ pub fn run() {
             desktop::prevent_close_and_hide(window, event);
         })
         .setup(|app| {
+            startup::configure_bundled_hook_source(app);
             app.manage(startup::initialize_startup_state());
 
             #[cfg(desktop)]

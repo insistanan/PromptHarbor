@@ -4,6 +4,31 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
+use tauri::{path::BaseDirectory, Manager};
+
+const PROMPTBOX_HOOK_SOURCE_ENV: &str = "PROMPTBOX_HOOK_SOURCE";
+
+#[cfg(windows)]
+const BUNDLED_HOOK_RESOURCE: &str = "resources/promptbox-hook.exe";
+#[cfg(not(windows))]
+const BUNDLED_HOOK_RESOURCE: &str = "resources/promptbox-hook";
+
+pub(crate) fn configure_bundled_hook_source(app: &tauri::App) {
+    if std::env::var_os(PROMPTBOX_HOOK_SOURCE_ENV).is_some() {
+        return;
+    }
+
+    let Ok(path) = app
+        .path()
+        .resolve(BUNDLED_HOOK_RESOURCE, BaseDirectory::Resource)
+    else {
+        return;
+    };
+
+    if path.is_file() {
+        std::env::set_var(PROMPTBOX_HOOK_SOURCE_ENV, path);
+    }
+}
 
 pub(crate) fn initialize_startup_state() -> StartupState {
     let collector_state = collector::CollectorState::new();

@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.insistanan.promptharbor",
   "build": {
-    "beforeDevCommand": "npm --prefix ../frontend run dev",
-    "beforeBuildCommand": "npm --prefix ../frontend run build",
+    "beforeDevCommand": "npm --prefix ../../frontend run dev",
+    "beforeBuildCommand": "npm --prefix ../../frontend run build",
     "devUrl": "http://localhost:5173",
-    "frontendDist": "../frontend/dist"
+    "frontendDist": "../../frontend/dist"
   },
   "app": {
     "windows": [
@@ -26,6 +26,7 @@
   "bundle": {
     "active": true,
     "icon": ["icons/icon.ico"],
+    "resources": ["resources/"],
     "targets": "all"
   }
 }
