@@ -1,39 +1,32 @@
 use crate::{collector, state::StartupState};
 use promptbox_core::{clear_spool_events, read_spool_events, AppStatus, PromptStore, RuntimeState};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 use tauri::{path::BaseDirectory, Manager};
-
-const PROMPTBOX_HOOK_SOURCE_ENV: &str = "PROMPTBOX_HOOK_SOURCE";
 
 #[cfg(windows)]
 const BUNDLED_HOOK_RESOURCE: &str = "resources/promptbox-hook.exe";
 #[cfg(not(windows))]
 const BUNDLED_HOOK_RESOURCE: &str = "resources/promptbox-hook";
 
-pub(crate) fn configure_bundled_hook_source(app: &tauri::App) {
-    if std::env::var_os(PROMPTBOX_HOOK_SOURCE_ENV).is_some() {
-        return;
-    }
-
-    let Ok(path) = app
+pub(crate) fn bundled_hook_source(app: &tauri::App) -> Option<PathBuf> {
+    let path = app
         .path()
         .resolve(BUNDLED_HOOK_RESOURCE, BaseDirectory::Resource)
-    else {
-        return;
-    };
+        .ok()?;
 
-    if path.is_file() {
-        std::env::set_var(PROMPTBOX_HOOK_SOURCE_ENV, path);
-    }
+    path.is_file().then_some(path)
 }
 
-pub(crate) fn initialize_startup_state() -> StartupState {
+pub(crate) fn initialize_startup_state(hook_source: Option<&Path>) -> StartupState {
     let collector_state = collector::CollectorState::new();
     let recording_paused = Arc::new(AtomicBool::new(false));
-    let (status, store) = match promptbox_core::initialize_runtime() {
+    let (status, store) = match promptbox_core::initialize_runtime_with_hook_source(hook_source) {
         Ok(runtime) => initialize_runtime_dependent_state(
             &runtime,
             collector_state.clone(),

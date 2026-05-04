@@ -5,12 +5,16 @@ use std::{
 
 pub(in crate::hook_binary) const PROMPTBOX_HOOK_SOURCE_ENV: &str = "PROMPTBOX_HOOK_SOURCE";
 
-pub(in crate::hook_binary) fn find_hook_source() -> Option<PathBuf> {
+pub(in crate::hook_binary) fn find_hook_source(override_source: Option<&Path>) -> Option<PathBuf> {
     if let Ok(source) = env::var(PROMPTBOX_HOOK_SOURCE_ENV) {
         let source = PathBuf::from(source);
         if source.is_file() {
             return Some(source);
         }
+    }
+
+    if let Some(source) = override_source.filter(|source| source.is_file()) {
+        return Some(source.to_path_buf());
     }
 
     let current_exe = env::current_exe().ok()?;

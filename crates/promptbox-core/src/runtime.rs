@@ -1,4 +1,5 @@
 use crate::hook_binary::{HookBinaryManager, HookBinaryStatus};
+use std::path::Path;
 
 mod config;
 mod paths;
@@ -23,13 +24,17 @@ pub struct RuntimeState {
 
 impl RuntimeState {
     pub fn initialize() -> Result<Self, String> {
+        Self::initialize_with_hook_source(None)
+    }
+
+    pub fn initialize_with_hook_source(hook_source: Option<&Path>) -> Result<Self, String> {
         let mut startup_errors = Vec::new();
         let paths = PromptBoxPaths::resolve()?;
         paths.ensure_directories()?;
 
         let (config, _) = PromptBoxConfig::load_or_create(&paths.config_path)?;
-        let hook_binary =
-            HookBinaryManager::ensure(&paths.hook_binary_path).unwrap_or_else(|error| {
+        let hook_binary = HookBinaryManager::ensure(&paths.hook_binary_path, hook_source)
+            .unwrap_or_else(|error| {
                 let message = error;
                 startup_errors.push(message.clone());
                 HookBinaryStatus::not_ready(

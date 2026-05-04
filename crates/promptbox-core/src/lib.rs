@@ -7,6 +7,8 @@ mod hook_config;
 mod runtime;
 mod store;
 
+use std::path::Path;
+
 pub use event::{
     append_spool_event, clear_spool_events, current_captured_at, endpoint_host_port,
     import_spool_events, normalize_hook_input, parse_local_endpoint, read_spool_events,
@@ -31,4 +33,10 @@ pub use store::{
 
 pub fn initialize_runtime() -> Result<RuntimeState, String> {
     RuntimeState::initialize()
+}
+
+pub fn initialize_runtime_with_hook_source(
+    hook_source: Option<&Path>,
+) -> Result<RuntimeState, String> {
+    RuntimeState::initialize_with_hook_source(hook_source)
 }

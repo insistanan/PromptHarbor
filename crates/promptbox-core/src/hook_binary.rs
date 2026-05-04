@@ -17,8 +17,11 @@ pub const HOOK_PROTOCOL_VERSION: &str = "0.1.0";
 pub(crate) struct HookBinaryManager;
 
 impl HookBinaryManager {
-    pub(crate) fn ensure(target: &Path) -> Result<HookBinaryStatus, String> {
-        let source = find_hook_source();
+    pub(crate) fn ensure(
+        target: &Path,
+        override_source: Option<&Path>,
+    ) -> Result<HookBinaryStatus, String> {
+        let source = find_hook_source(override_source);
         let mut existing_failure = None;
         let mut source_failure = None;
 
