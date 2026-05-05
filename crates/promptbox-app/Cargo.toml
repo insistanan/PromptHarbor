@@ -12,9 +12,11 @@ default-run = "promptbox-app"
 tauri-build.workspace = true
 
 [dependencies]
+chrono.workspace = true
 promptbox-core.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
 tauri-plugin-positioner.workspace = true
+zip.workspace = true

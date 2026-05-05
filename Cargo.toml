@@ -27,3 +27,4 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-build = { version = "2", features = [] }
 tauri-plugin-positioner = "2"
 toml = "0.8"
+zip = "2"

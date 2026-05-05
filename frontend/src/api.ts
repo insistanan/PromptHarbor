@@ -71,6 +71,79 @@ export function searchPrompts<T>(payload: { query: string; includeLowInfo: boole
   return invoke<T>('search_prompts', payload);
 }
 
+export function listSkills<T>() {
+  return invoke<T>('list_skills');
+}
+
+export function readSkillDetail<T>(payload: { skillFile: string }) {
+  return invoke<T>('read_skill_detail', payload);
+}
+
+export function translateSkill<T>(payload: {
+  providerId: string;
+  skillId: string;
+  skillFile: string;
+  contentHash: string;
+  force?: boolean;
+}) {
+  return invoke<T>('translate_skill', payload);
+}
+
+export function listImportedSkillPackages<T>() {
+  return invoke<T>('list_imported_skill_packages');
+}
+
+export function importSkillZip<T>(payload: { zipPath: string }) {
+  return invoke<T>('import_skill_zip', payload);
+}
+
+export function importSkillZipBytes<T>(payload: {
+  originalFileName: string;
+  zipBytes: number[];
+}) {
+  return invoke<T>('import_skill_zip_bytes', payload);
+}
+
+export function installImportedSkill<T>(payload: {
+  packageId: string;
+  targets: string[];
+  targetSkillName: string | null;
+  overwrite: boolean;
+}) {
+  return invoke<T>('install_imported_skill', payload);
+}
+
+export function exportSkillToLibrary<T>(payload: {
+  skillId: string;
+  skillFile: string;
+  contentHash: string;
+}) {
+  return invoke<T>('export_skill_to_library', payload);
+}
+
+export function transferSkill<T>(payload: {
+  skillId: string;
+  skillFile: string;
+  contentHash: string;
+  targetProvider: string;
+  targetSkillName: string | null;
+  overwrite: boolean;
+}) {
+  return invoke<T>('transfer_skill', payload);
+}
+
+export function deleteSkill<T>(payload: {
+  skillId: string;
+  skillFile: string;
+  contentHash: string;
+}) {
+  return invoke<T>('delete_skill', payload);
+}
+
+export function deleteImportedSkillPackage<T>(payload: { packageId: string }) {
+  return invoke<T>('delete_imported_skill_package', payload);
+}
+
 export function updateRuntimeConfig<T>(payload: {
   localEndpoint: string;
   recordingPaused: boolean;

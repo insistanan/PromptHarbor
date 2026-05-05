@@ -35,3 +35,16 @@ export type {
   CustomProviderTestResult,
   PromptOptimizationResult,
 } from './types/providers';
+export type {
+  ImportedSkillPackageDeleteResult,
+  ImportedSkillPackageSummary,
+  InstalledSkillTarget,
+  SkillDetail,
+  SkillDeleteResult,
+  SkillInstallResult,
+  SkillListItem,
+  SkillProvider,
+  SkillSourceKind,
+  SkillTransferResult,
+  SkillTranslationResult,
+} from './types/skills';

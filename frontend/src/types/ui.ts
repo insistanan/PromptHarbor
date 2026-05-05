@@ -12,4 +12,4 @@ export type DraftContextMenuState = {
   item: DraftListItem;
 };
 
-export type MainView = 'sessions' | 'drafts' | 'search' | 'settings';
+export type MainView = 'sessions' | 'drafts' | 'skills' | 'search' | 'settings';

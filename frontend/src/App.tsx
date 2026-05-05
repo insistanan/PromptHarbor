@@ -3,6 +3,7 @@ import * as api from './api';
 import {
   MessageSquare,
   FileEdit,
+  Sparkles,
   Search,
   Settings,
   CheckCircle2,
@@ -31,6 +32,7 @@ import {
   sessionResumeCommand,
 } from './features/sessions/sessionHelpers';
 import { useSessionBrowserState } from './features/sessions/useSessionBrowserState';
+import { SkillsWorkspace } from './features/skills/SkillsWorkspace';
 import { PromptSearch } from './features/search/PromptSearch';
 import type { PromptSearchResultItem } from './features/search/PromptSearch';
 import { RuntimeSettings } from './features/settings/RuntimeSettings';
@@ -43,6 +45,7 @@ function cn(...inputs: ClassValue[]) {
 const menuItems: Array<{ id: MainView; label: string; icon: any }> = [
   { id: 'sessions', label: '会话', icon: MessageSquare },
   { id: 'drafts', label: '草稿', icon: FileEdit },
+  { id: 'skills', label: '技能', icon: Sparkles },
   { id: 'search', label: '搜索', icon: Search },
   { id: 'settings', label: '设置', icon: Settings },
 ];
@@ -348,6 +351,10 @@ export function App() {
               />
             ) : null}
 
+            {activeView === 'skills' ? (
+              <SkillsWorkspace onError={setError} onNotice={showCopyNotice} />
+            ) : null}
+
             {activeView === 'drafts' ? (
               <DraftWorkspace
                 {...draftWorkspace.workspaceProps}
@@ -397,6 +404,9 @@ function menuBadge(
   }
   if (view === 'drafts') {
     return '编辑';
+  }
+  if (view === 'skills') {
+    return '列表';
   }
   if (view === 'search') {
     return searchResultCount ? String(searchResultCount) : '全局';

@@ -5,6 +5,7 @@ mod hook_adapter;
 mod hook_binary;
 mod hook_config;
 mod runtime;
+mod skills;
 mod store;
 
 use std::path::Path;
@@ -25,6 +26,7 @@ pub use runtime::{
     CustomProviderUpsertInput, PromptBoxConfig, PromptBoxPaths, RuntimeState,
     APP_DISPLAY_NAME, APP_NAME, DEFAULT_LOCAL_ENDPOINT,
 };
+pub use skills::{list_skills, read_skill_detail, SkillDetail, SkillListItem};
 pub use store::{
     ArchiveSessionOutcome, DeleteSessionOutcome, DraftList, DraftListItem, DraftState,
     PromptAttachment, PromptAttachmentDataUrl, PromptHistory, PromptHistoryItem,

@@ -5,4 +5,5 @@ pub(crate) mod hooks;
 pub(crate) mod providers;
 pub(crate) mod runtime;
 pub(crate) mod sessions;
+pub(crate) mod skills;
 pub(crate) mod status;

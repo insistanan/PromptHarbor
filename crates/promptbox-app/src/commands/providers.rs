@@ -32,9 +32,9 @@ pub(crate) struct PromptOptimizationResult {
 }
 
 #[derive(Debug, Clone)]
-struct OpenaiChatTextResult {
-    model: String,
-    text: String,
+pub(crate) struct ProviderTextResult {
+    pub model: String,
+    pub text: String,
 }
 
 #[tauri::command]
@@ -106,7 +106,7 @@ pub(crate) async fn optimize_prompt_with_custom_provider(
     })
 }
 
-fn load_runtime_config() -> Result<(std::path::PathBuf, PromptBoxConfig), String> {
+pub(crate) fn load_runtime_config() -> Result<(std::path::PathBuf, PromptBoxConfig), String> {
     let paths = resolve_promptbox_paths()?;
     let (config, _) = PromptBoxConfig::load_or_create(&paths.config_path)?;
     Ok((paths.config_path, config))
@@ -152,7 +152,7 @@ async fn send_openai_chat_test(
 async fn optimize_prompt_with_provider(
     provider: &CustomProviderConfig,
     prompt_md: &str,
-) -> Result<OpenaiChatTextResult, String> {
+) -> Result<ProviderTextResult, String> {
     request_openai_chat_text(
         provider,
         vec![
@@ -172,7 +172,7 @@ async fn optimize_prompt_with_provider(
 async fn request_openai_chat_text(
     provider: &CustomProviderConfig,
     messages: Vec<Value>,
-) -> Result<OpenaiChatTextResult, String> {
+) -> Result<ProviderTextResult, String> {
     let endpoint = openai_chat_completions_endpoint(&provider.base_url)?;
     let client = Client::builder()
         .timeout(Duration::from_secs(20))
@@ -213,7 +213,24 @@ async fn request_openai_chat_text(
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "供应商返回成功，但没有可用的文本内容".to_string())?;
 
-    Ok(OpenaiChatTextResult { model, text })
+    Ok(ProviderTextResult { model, text })
+}
+
+pub(crate) async fn request_text_with_custom_provider(
+    provider: &CustomProviderConfig,
+    messages: Vec<Value>,
+) -> Result<ProviderTextResult, String> {
+    if !provider.enabled {
+        return Err("所选自定义供应商未启用".to_string());
+    }
+    if !provider.secret_configured() {
+        return Err("所选自定义供应商未配置 API 密钥".to_string());
+    }
+    if !provider.supported() {
+        return Err(format!("{} 协议暂未支持文本请求", provider.protocol_label()));
+    }
+
+    request_openai_chat_text(provider, messages).await
 }
 
 fn openai_chat_completions_endpoint(base_url: &str) -> Result<String, String> {
