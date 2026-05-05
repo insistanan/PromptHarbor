@@ -38,3 +38,10 @@ export type CustomProviderTestResult = {
   message: string;
   assistantPreview: string;
 };
+
+export type PromptOptimizationResult = {
+  providerId: string;
+  providerName: string;
+  model: string;
+  optimizedPromptMd: string;
+};

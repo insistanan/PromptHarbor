@@ -33,4 +33,5 @@ export type {
   CustomProviderSaveResult,
   CustomProviderSummary,
   CustomProviderTestResult,
+  PromptOptimizationResult,
 } from './types/providers';

@@ -114,6 +114,13 @@ export function testCustomProvider<T>(draft: {
   return invoke<T>('test_custom_provider', { draft });
 }
 
+export function optimizePromptWithCustomProvider<T>(payload: {
+  providerId: string;
+  promptMd: string;
+}) {
+  return invoke<T>('optimize_prompt_with_custom_provider', payload);
+}
+
 export type HookProvider = 'claude' | 'codex';
 
 export function getHookStatus<T>(provider: HookProvider) {

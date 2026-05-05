@@ -22,6 +22,21 @@ pub(crate) struct CustomProviderTestResult {
     pub assistant_preview: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PromptOptimizationResult {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub model: String,
+    pub optimized_prompt_md: String,
+}
+
+#[derive(Debug, Clone)]
+struct OpenaiChatTextResult {
+    model: String,
+    text: String,
+}
+
 #[tauri::command]
 pub(crate) fn list_custom_providers() -> Result<Vec<CustomProviderSummary>, String> {
     let (_, config) = load_runtime_config()?;
@@ -58,6 +73,39 @@ pub(crate) async fn test_custom_provider(
     send_provider_test_request(&provider).await
 }
 
+#[tauri::command]
+pub(crate) async fn optimize_prompt_with_custom_provider(
+    provider_id: String,
+    prompt_md: String,
+) -> Result<PromptOptimizationResult, String> {
+    let (_, config) = load_runtime_config()?;
+    let provider = config
+        .custom_provider(provider_id.trim())
+        .ok_or_else(|| "所选自定义供应商不存在".to_string())?;
+    if !provider.enabled {
+        return Err("所选自定义供应商未启用".to_string());
+    }
+    if !provider.secret_configured() {
+        return Err("所选自定义供应商未配置 API 密钥".to_string());
+    }
+    if !provider.supported() {
+        return Err(format!("{} 协议暂未支持提示词优化", provider.protocol_label()));
+    }
+
+    let source_prompt = prompt_md.trim();
+    if source_prompt.is_empty() {
+        return Err("草稿内容为空，无法优化提示词".to_string());
+    }
+
+    let optimized = optimize_prompt_with_provider(provider, source_prompt).await?;
+    Ok(PromptOptimizationResult {
+        provider_id: provider.id.clone(),
+        provider_name: provider.name.clone(),
+        model: optimized.model,
+        optimized_prompt_md: optimized.text,
+    })
+}
+
 fn load_runtime_config() -> Result<(std::path::PathBuf, PromptBoxConfig), String> {
     let paths = resolve_promptbox_paths()?;
     let (config, _) = PromptBoxConfig::load_or_create(&paths.config_path)?;
@@ -79,6 +127,52 @@ async fn send_provider_test_request(
 async fn send_openai_chat_test(
     provider: &CustomProviderConfig,
 ) -> Result<CustomProviderTestResult, String> {
+    let response = request_openai_chat_text(
+        provider,
+        vec![json!({
+            "role": "user",
+            "content": "请只回复 ok"
+        })],
+    )
+    .await?;
+    let assistant_preview = response.text;
+    let preview = if assistant_preview.trim().is_empty() {
+        "供应商已返回成功响应".to_string()
+    } else {
+        truncate_text(&assistant_preview, 120)
+    };
+
+    Ok(CustomProviderTestResult {
+        model: response.model.clone(),
+        message: format!("连接成功，模型 {} 可用", response.model),
+        assistant_preview: preview,
+    })
+}
+
+async fn optimize_prompt_with_provider(
+    provider: &CustomProviderConfig,
+    prompt_md: &str,
+) -> Result<OpenaiChatTextResult, String> {
+    request_openai_chat_text(
+        provider,
+        vec![
+            json!({
+                "role": "system",
+                "content": "你是一个提示词优化助手。你的任务是改写用户提供的提示词，使其更清晰、结构化、可执行，同时保留原始目标、约束、语气和语言。不要回答提示词里的任务本身，只输出优化后的提示词正文。保留 Markdown 结构；不要添加解释、前言、后记或代码围栏。"
+            }),
+            json!({
+                "role": "user",
+                "content": format!("请优化下面这段提示词，并且只输出优化后的提示词正文：\n\n{prompt_md}")
+            }),
+        ],
+    )
+    .await
+}
+
+async fn request_openai_chat_text(
+    provider: &CustomProviderConfig,
+    messages: Vec<Value>,
+) -> Result<OpenaiChatTextResult, String> {
     let endpoint = openai_chat_completions_endpoint(&provider.base_url)?;
     let client = Client::builder()
         .timeout(Duration::from_secs(20))
@@ -86,16 +180,11 @@ async fn send_openai_chat_test(
         .map_err(|error| format!("创建供应商请求客户端失败：{error}"))?;
 
     let response = client
-        .post(endpoint.clone())
+        .post(endpoint)
         .bearer_auth(provider.api_key.trim())
         .json(&json!({
             "model": provider.default_model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "请只回复 ok"
-                }
-            ]
+            "messages": messages
         }))
         .send()
         .await
@@ -120,18 +209,11 @@ async fn send_openai_chat_test(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(provider.default_model.as_str())
         .to_string();
-    let assistant_preview = extract_openai_output_text(&payload).unwrap_or_default();
-    let preview = if assistant_preview.trim().is_empty() {
-        "供应商已返回成功响应".to_string()
-    } else {
-        truncate_text(&assistant_preview, 120)
-    };
+    let text = extract_openai_output_text(&payload)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "供应商返回成功，但没有可用的文本内容".to_string())?;
 
-    Ok(CustomProviderTestResult {
-        model: model.clone(),
-        message: format!("连接成功，模型 {model} 可用"),
-        assistant_preview: preview,
-    })
+    Ok(OpenaiChatTextResult { model, text })
 }
 
 fn openai_chat_completions_endpoint(base_url: &str) -> Result<String, String> {

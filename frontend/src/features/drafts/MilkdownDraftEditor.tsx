@@ -1,5 +1,8 @@
 import { useRef } from 'react';
-import type { ClipboardEvent as ReactClipboardEvent } from 'react';
+import type {
+  ClipboardEvent as ReactClipboardEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { Editor, defaultValueCtx, rootCtx } from '@milkdown/kit/core';
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener';
 import { history } from '@milkdown/kit/plugin/history';
@@ -7,13 +10,17 @@ import { commonmark } from '@milkdown/kit/preset/commonmark';
 import { Milkdown, useEditor } from '@milkdown/react';
 
 export function MilkdownDraftEditor({
+  canTogglePromptVariant,
   disabled,
   initialValue,
+  onTogglePromptVariant,
   onPasteImages,
   onChange,
 }: {
+  canTogglePromptVariant: boolean;
   disabled: boolean;
   initialValue: string;
+  onTogglePromptVariant: () => void;
   onPasteImages: (files: File[]) => void;
   onChange: (markdown: string) => void;
 }) {
@@ -29,6 +36,24 @@ export function MilkdownDraftEditor({
     event.preventDefault();
     event.stopPropagation();
     onPasteImages(files);
+  };
+
+  const handleKeyDownCapture = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (
+      !canTogglePromptVariant ||
+      disabled ||
+      event.key !== 'Tab' ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    onTogglePromptVariant();
   };
 
   const { loading } = useEditor((root) =>
@@ -48,6 +73,7 @@ export function MilkdownDraftEditor({
   return (
     <div
       className={disabled || loading ? 'milkdown-host disabled' : 'milkdown-host'}
+      onKeyDownCapture={handleKeyDownCapture}
       onPasteCapture={handlePaste}
     >
       <Milkdown />

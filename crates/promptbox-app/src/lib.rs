@@ -53,6 +53,7 @@ pub fn run() {
             commands::providers::save_custom_provider,
             commands::providers::delete_custom_provider,
             commands::providers::test_custom_provider,
+            commands::providers::optimize_prompt_with_custom_provider,
             commands::runtime::set_recording_paused,
             commands::runtime::update_runtime_config,
             commands::hooks::hook_status,

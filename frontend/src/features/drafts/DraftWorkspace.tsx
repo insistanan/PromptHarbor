@@ -1,5 +1,6 @@
 import { MilkdownProvider } from '@milkdown/react';
 import type {
+  CustomProviderSummary,
   DraftImageAttachment,
   DraftList,
   DraftListItem,
@@ -11,7 +12,7 @@ import { displaySessionPath } from '../sessions/sessionHelpers';
 import { DraftItemList } from './DraftItemList';
 import { ImageAttachmentStrip } from './ImageAttachmentStrip';
 import { MilkdownDraftEditor } from './MilkdownDraftEditor';
-import { Layers, CheckCircle2, Copy, Clock } from 'lucide-react';
+import { Layers, CheckCircle2, Copy, Clock, Sparkles, ArrowLeftRight } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -20,6 +21,8 @@ function cn(...inputs: ClassValue[]) {
 }
 
 export type DraftWorkspaceProps = {
+  activePromptVariant: 'original' | 'optimized';
+  canTogglePromptVariant: boolean;
   currentDraftContent: string;
   draft: DraftState | null;
   draftCache: Record<string, string>;
@@ -36,19 +39,28 @@ export type DraftWorkspaceProps = {
   onCreateDraft: () => void;
   onDeleteDraft: (item: DraftListItem | null) => void;
   onDraftChange: (markdown: string) => void;
+  onOptimizePrompt: () => void;
   onOpenDraftContextMenu: (item: DraftListItem, x: number, y: number) => void;
   onOpenSessionHistory: (session: SessionListItem) => void;
   onPasteImages: (files: File[]) => void;
   onPreviewImage: (image: DraftImageAttachment) => void;
   onRemoveImage: (imageId: string) => void;
+  onSelectOptimizationProvider: (providerId: string | null) => void;
   onSelectDraft: (item: DraftListItem) => void;
   onSelectSession: (session: SessionListItem) => void;
+  onTogglePromptVariant: () => void;
+  optimizationDisabledReason: string | null;
+  optimizationProviderOptions: CustomProviderSummary[];
+  optimizingPrompt: boolean;
   selectedDraftId: number | null;
+  selectedOptimizationProviderId: string | null;
   selectedSession: SessionListItem | null;
   sessions: SessionListItem[];
 };
 
 export function DraftWorkspace({
+  activePromptVariant,
+  canTogglePromptVariant,
   currentDraftContent,
   draft,
   draftCache,
@@ -65,14 +77,21 @@ export function DraftWorkspace({
   onCreateDraft,
   onDeleteDraft,
   onDraftChange,
+  onOptimizePrompt,
   onOpenDraftContextMenu,
   onOpenSessionHistory,
   onPasteImages,
   onPreviewImage,
   onRemoveImage,
+  onSelectOptimizationProvider,
   onSelectDraft,
   onSelectSession,
+  onTogglePromptVariant,
+  optimizationDisabledReason,
+  optimizationProviderOptions,
+  optimizingPrompt,
   selectedDraftId,
+  selectedOptimizationProviderId,
   selectedSession,
   sessions,
 }: DraftWorkspaceProps) {
@@ -156,9 +175,11 @@ export function DraftWorkspace({
                 <div className="relative">
                   <MilkdownProvider>
                     <MilkdownDraftEditor
-                      disabled={draftLoading || draft?.status === 'sent'}
+                      canTogglePromptVariant={canTogglePromptVariant}
+                      disabled={draftLoading || optimizingPrompt || draft?.status === 'sent'}
                       initialValue={currentDraftContent}
                       key={`${draftStateKey ?? 'none'}:${editorVersion}`}
+                      onTogglePromptVariant={onTogglePromptVariant}
                       onPasteImages={onPasteImages}
                       onChange={onDraftChange}
                     />
@@ -166,28 +187,114 @@ export function DraftWorkspace({
                 </div>
               </div>
 
-              <footer className="px-5 py-3 border-t border-border/40 bg-secondary/10 flex items-center justify-end gap-3">
-                {draftMessage && (
-                  <span className="text-[11px] font-semibold text-emerald-600 mr-2 flex items-center gap-1 animate-in fade-in slide-in-from-right-2">
-                    <CheckCircle2 size={12} />
-                    {draftMessage}
-                  </span>
-                )}
-                <button
-                  className="group flex items-center gap-2 px-6 py-2.5 rounded-md bg-primary text-white text-xs font-black shadow-lg shadow-primary/20 hover:shadow-primary/30 hover:-translate-y-0.5 transition-all active:translate-y-0 disabled:opacity-50 disabled:grayscale disabled:translate-y-0 disabled:shadow-none"
-                  disabled={
-                    draftLoading ||
-                    draftSaving ||
-                    draftHasUnsavedChanges ||
-                    !draft ||
-                    !currentDraftContent.trim()
-                  }
-                  onClick={onCopyDraft}
-                  type="button"
-                >
-                  <Copy size={14} className="group-hover:rotate-12 transition-transform" />
-                  <span className="whitespace-nowrap">复制到剪贴板</span>
-                </button>
+              <footer className="px-5 py-3 border-t border-border/40 bg-secondary/10 flex flex-col gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    {draftMessage && (
+                      <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1 animate-in fade-in slide-in-from-right-2">
+                        <CheckCircle2 size={12} />
+                        {draftMessage}
+                      </span>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-semibold text-muted-foreground">版本</span>
+                      <button
+                        className={cn(
+                          'inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-bold transition-colors',
+                          activePromptVariant === 'original'
+                            ? 'border-primary/30 bg-primary/10 text-primary'
+                            : 'border-border bg-background text-muted-foreground',
+                        )}
+                        disabled={optimizingPrompt}
+                        onClick={() => {
+                          if (activePromptVariant === 'optimized') {
+                            onTogglePromptVariant();
+                          }
+                        }}
+                        type="button"
+                      >
+                        原文
+                      </button>
+                      <button
+                        className={cn(
+                          'inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-bold transition-colors',
+                          activePromptVariant === 'optimized'
+                            ? 'border-primary/30 bg-primary/10 text-primary'
+                            : 'border-border bg-background text-muted-foreground',
+                        )}
+                        disabled={!canTogglePromptVariant || optimizingPrompt}
+                        onClick={() => {
+                          if (activePromptVariant === 'original') {
+                            onTogglePromptVariant();
+                          }
+                        }}
+                        type="button"
+                      >
+                        优化稿
+                      </button>
+                      {canTogglePromptVariant ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-muted-foreground">
+                          <ArrowLeftRight size={12} />
+                          Tab 切换
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <select
+                      className="h-10 min-w-[220px] rounded-md border border-border/60 bg-background px-3 text-xs font-semibold text-foreground outline-none transition focus:border-primary/40 focus:ring-2 focus:ring-primary/10 disabled:cursor-default disabled:opacity-60"
+                      disabled={!optimizationProviderOptions.length || optimizingPrompt}
+                      onChange={(event) =>
+                        onSelectOptimizationProvider(event.currentTarget.value || null)
+                      }
+                      value={selectedOptimizationProviderId ?? ''}
+                    >
+                      {optimizationProviderOptions.length ? (
+                        optimizationProviderOptions.map((provider) => (
+                          <option key={provider.id} value={provider.id}>
+                            {provider.name} · {provider.defaultModel}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">无可用供应商</option>
+                      )}
+                    </select>
+                    <button
+                      className="group flex items-center gap-2 px-4 py-2.5 rounded-md border border-primary/20 bg-primary/10 text-primary text-xs font-black hover:bg-primary/15 hover:-translate-y-0.5 transition-all active:translate-y-0 disabled:opacity-50 disabled:grayscale disabled:translate-y-0"
+                      disabled={Boolean(optimizationDisabledReason) || optimizingPrompt}
+                      onClick={onOptimizePrompt}
+                      type="button"
+                    >
+                      <Sparkles size={14} className="group-hover:rotate-6 transition-transform" />
+                      <span className="whitespace-nowrap">
+                        {optimizingPrompt ? '优化中' : '优化提示词'}
+                      </span>
+                    </button>
+                    <button
+                      className="group flex items-center gap-2 px-6 py-2.5 rounded-md bg-primary text-white text-xs font-black shadow-lg shadow-primary/20 hover:shadow-primary/30 hover:-translate-y-0.5 transition-all active:translate-y-0 disabled:opacity-50 disabled:grayscale disabled:translate-y-0 disabled:shadow-none"
+                      disabled={
+                        draftLoading ||
+                        optimizingPrompt ||
+                        draftSaving ||
+                        draftHasUnsavedChanges ||
+                        !draft ||
+                        !currentDraftContent.trim()
+                      }
+                      onClick={onCopyDraft}
+                      type="button"
+                    >
+                      <Copy size={14} className="group-hover:rotate-12 transition-transform" />
+                      <span className="whitespace-nowrap">复制到剪贴板</span>
+                    </button>
+                  </div>
+                </div>
+
+                {optimizationDisabledReason ? (
+                  <p className="text-[11px] font-medium text-amber-700">
+                    {optimizationDisabledReason}
+                  </p>
+                ) : null}
               </footer>
             </div>
           ) : (
