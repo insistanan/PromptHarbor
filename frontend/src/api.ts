@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import type { CustomProviderProtocol } from './types/providers';
 
 export function getAppStatus<T>() {
   return invoke<T>('app_status');
@@ -79,6 +80,38 @@ export function updateRuntimeConfig<T>(payload: {
   autostart: boolean;
 }) {
   return invoke<T>('update_runtime_config', payload);
+}
+
+export function listCustomProviders<T>() {
+  return invoke<T>('list_custom_providers');
+}
+
+export function saveCustomProvider<T>(draft: {
+  providerId: string | null;
+  name: string;
+  protocol: CustomProviderProtocol;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+  enabled: boolean;
+}) {
+  return invoke<T>('save_custom_provider', { draft });
+}
+
+export function deleteCustomProvider<T>(payload: { providerId: string }) {
+  return invoke<T>('delete_custom_provider', payload);
+}
+
+export function testCustomProvider<T>(draft: {
+  providerId: string | null;
+  name: string;
+  protocol: CustomProviderProtocol;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+  enabled: boolean;
+}) {
+  return invoke<T>('test_custom_provider', { draft });
 }
 
 export type HookProvider = 'claude' | 'codex';

@@ -832,7 +832,24 @@ h3 {
   font-size: 13px;
 }
 
+.config-field select {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid #c8d1d9;
+  border-radius: 7px;
+  outline: none;
+  background: #ffffff;
+  color: #26313b;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
 .config-field input:focus {
+  border-color: #67927f;
+  box-shadow: 0 0 0 3px rgba(103, 146, 127, 0.14);
+}
+
+.config-field select:focus {
   border-color: #67927f;
   box-shadow: 0 0 0 3px rgba(103, 146, 127, 0.14);
 }
@@ -841,6 +858,110 @@ h3 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.provider-panel {
+  grid-column: 1 / -1;
+}
+
+.provider-toolbar {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid #e0e6eb;
+  padding: 12px 14px;
+}
+
+.provider-toolbar-note {
+  margin: 0;
+  color: #6a7580;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.provider-list {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid #e0e6eb;
+  padding: 12px 14px;
+}
+
+.provider-list-item {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #d8e1e7;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #26313b;
+  cursor: pointer;
+  padding: 10px;
+  text-align: left;
+}
+
+.provider-list-item:hover,
+.provider-list-item:focus-visible {
+  border-color: #8aa898;
+  outline: none;
+}
+
+.provider-list-item.active {
+  border-color: #67927f;
+  background: #f3faf6;
+}
+
+.provider-list-item-header,
+.provider-list-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.provider-list-item-header strong {
+  color: #202830;
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.provider-list-item-header span,
+.provider-list-item-meta span {
+  color: #6a7580;
+  font-size: 12px;
+}
+
+.provider-empty {
+  border: 1px dashed #c8d1d9;
+  border-radius: 8px;
+  background: #f7f9fa;
+  padding: 16px;
+}
+
+.provider-empty p,
+.provider-inline-note {
+  margin: 0;
+  color: #6a7580;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.provider-test-result {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #b9d0c6;
+  border-radius: 8px;
+  background: #f2fbf6;
+  padding: 10px;
+}
+
+.provider-test-result strong {
+  color: #235844;
+  font-size: 13px;
+}
+
+.provider-test-result small {
+  color: #4f6a5f;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
 }
 
 .runtime-list {

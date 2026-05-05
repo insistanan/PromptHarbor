@@ -1,4 +1,5 @@
 import type { AppStatus } from '../../appTypes';
+import { CustomProviderSettingsPanel } from './CustomProviderSettingsPanel';
 import { HookSettingsPanel } from './HookSettingsPanel';
 import { RuntimeConfigPanel } from './RuntimeConfigPanel';
 import { RuntimeStatusPanel } from './RuntimeStatusPanel';
@@ -35,6 +36,7 @@ export function RuntimeSettings({
       {settings.hookItems.map((item) => (
         <HookSettingsPanel item={item} key={item.provider} />
       ))}
+      <CustomProviderSettingsPanel onError={onError} onNotice={onNotice} />
     </div>
   );
 }

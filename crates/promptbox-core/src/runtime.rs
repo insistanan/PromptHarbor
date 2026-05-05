@@ -5,7 +5,10 @@ mod config;
 mod paths;
 mod status;
 
-pub use config::{load_config_for_hook, PromptBoxConfig};
+pub use config::{
+    load_config_for_hook, CustomProviderConfig, CustomProviderProtocol,
+    CustomProviderSummary, CustomProviderUpsertInput, PromptBoxConfig,
+};
 pub use paths::{resolve_promptbox_paths, PromptBoxPaths};
 pub use status::{app_status_from_error, AppStatus};
 

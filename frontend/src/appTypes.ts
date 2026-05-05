@@ -27,3 +27,10 @@ export type {
   ImagePreviewState,
   MainView,
 } from './types/ui';
+export type {
+  CustomProviderDraft,
+  CustomProviderProtocol,
+  CustomProviderSaveResult,
+  CustomProviderSummary,
+  CustomProviderTestResult,
+} from './types/providers';

@@ -21,8 +21,9 @@ pub use hook_adapter::{
 pub use hook_binary::{HookBinaryStatus, HOOK_PROTOCOL_VERSION};
 pub use runtime::{
     app_status_from_error, load_config_for_hook, resolve_promptbox_paths, AppStatus,
-    PromptBoxConfig, PromptBoxPaths, RuntimeState, APP_DISPLAY_NAME, APP_NAME,
-    DEFAULT_LOCAL_ENDPOINT,
+    CustomProviderConfig, CustomProviderProtocol, CustomProviderSummary,
+    CustomProviderUpsertInput, PromptBoxConfig, PromptBoxPaths, RuntimeState,
+    APP_DISPLAY_NAME, APP_NAME, DEFAULT_LOCAL_ENDPOINT,
 };
 pub use store::{
     ArchiveSessionOutcome, DeleteSessionOutcome, DraftList, DraftListItem, DraftState,
