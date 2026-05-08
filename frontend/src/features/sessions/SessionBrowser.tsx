@@ -18,6 +18,7 @@ export type SessionBrowserProps = {
   onArchiveSelectedSession: () => void;
   onCopyPromptHistoryAttachment: (attachment: PromptAttachment) => void;
   onCopyPromptHistoryItem: (item: PromptHistoryItem) => void;
+  onEditSessionNote: (session: SessionListItem, note: string) => void;
   onHideLowInfoChange: (value: boolean) => void;
   onOpenSessionDrafts: (session: SessionListItem) => void;
   onPreviewPromptHistoryAttachment: (attachment: PromptAttachment, dataUrl: string) => void;
@@ -36,6 +37,7 @@ export function SessionBrowser({
   onArchiveSelectedSession,
   onCopyPromptHistoryAttachment,
   onCopyPromptHistoryItem,
+  onEditSessionNote,
   onHideLowInfoChange,
   onOpenSessionDrafts,
   onPreviewPromptHistoryAttachment,
@@ -53,6 +55,7 @@ export function SessionBrowser({
           label: '跳转到草稿',
           onSelect: onOpenSessionDrafts,
         }}
+        noteAction={{ onSave: onEditSessionNote }}
         emptyTitle="暂无会话"
         items={allSessions}
         onSelect={(session) => {

@@ -1,6 +1,6 @@
 use super::super::{
     attachments, drafts,
-    text::session_db_id,
+    text::{session_db_id, short_session_title, title_from_prompt},
     types::{ArchiveSessionOutcome, DeleteSessionOutcome},
 };
 use crate::current_captured_at;
@@ -167,6 +167,49 @@ fn remove_prompt_attachment_file(file_path: &Path, attachment_root: &Path) -> Re
         )
     })?;
     Ok(true)
+}
+
+pub(in crate::store) fn set_session_note(
+    connection: &Connection,
+    provider: &str,
+    session_id: &str,
+    note: &str,
+) -> Result<(), String> {
+    let now = current_captured_at();
+    let trimmed = note.trim();
+
+    if trimmed.is_empty() {
+        let (db_session_id, first_prompt): (String, Option<String>) = connection
+            .query_row(
+                "select session_id, first_prompt from sessions where provider = ?1 and session_id = ?2",
+                params![provider, session_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .map_err(|error| format!("读取 Agent 会话失败：{error}"))?;
+
+        let (fallback_title, fallback_source) = match first_prompt.as_deref() {
+            Some(prompt) if !prompt.trim().is_empty() => {
+                (title_from_prompt(prompt, &db_session_id), "first_non_low_info_prompt")
+            }
+            _ => (short_session_title(&db_session_id), "session_id"),
+        };
+
+        connection
+            .execute(
+                "update sessions set title = ?1, title_source = ?2, updated_at = ?3 where provider = ?4 and session_id = ?5",
+                params![fallback_title, fallback_source, now, provider, session_id],
+            )
+            .map_err(|error| format!("清除会话备注失败：{error}"))?;
+    } else {
+        connection
+            .execute(
+                "update sessions set title = ?1, title_source = 'manual', updated_at = ?2 where provider = ?3 and session_id = ?4",
+                params![trimmed, now, provider, session_id],
+            )
+            .map_err(|error| format!("更新会话备注失败：{error}"))?;
+    }
+
+    Ok(())
 }
 
 fn count_session_rows(

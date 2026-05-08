@@ -21,6 +21,10 @@ export function deleteSession<T>(payload: { provider: string; sessionId: string 
   return invoke<T>('delete_session', payload);
 }
 
+export function setSessionNote(payload: { provider: string; sessionId: string; note: string }) {
+  return invoke<void>('set_session_note', payload);
+}
+
 export function listDrafts<T>(payload: { provider: string; sessionId: string }) {
   return invoke<T>('list_drafts', payload);
 }

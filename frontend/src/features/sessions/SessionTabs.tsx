@@ -1,7 +1,7 @@
 import type { SessionListItem } from '../../appTypes';
 import { displaySessionPath, sessionStatusLabel } from './sessionHelpers';
-import { FileEdit, MessageSquare } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { FileEdit, MessageSquare, Pencil } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -13,6 +13,7 @@ export function SessionTabs({
   contextAction,
   emptyTitle,
   items,
+  noteAction,
   onSelect,
   selected,
 }: {
@@ -23,6 +24,9 @@ export function SessionTabs({
   };
   emptyTitle: string;
   items: SessionListItem[];
+  noteAction?: {
+    onSave: (session: SessionListItem, note: string) => void;
+  };
   onSelect: (session: SessionListItem) => void;
   selected: SessionListItem | null;
 }) {
@@ -31,6 +35,11 @@ export function SessionTabs({
     x: number;
     y: number;
   } | null>(null);
+  const [editNote, setEditNote] = useState<{
+    session: SessionListItem;
+    value: string;
+  } | null>(null);
+  const noteInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -97,15 +106,16 @@ export function SessionTabs({
             )}
             key={`${session.provider}:${session.sessionId}`}
             onContextMenu={(event) => {
-              if (!contextAction) {
+              if (!contextAction && !noteAction) {
                 return;
               }
               event.preventDefault();
               event.stopPropagation();
+              const itemCount = (contextAction ? 1 : 0) + (noteAction ? 1 : 0);
               setContextMenu({
                 session,
                 x: Math.min(event.clientX, window.innerWidth - 184),
-                y: Math.min(event.clientY, window.innerHeight - 54),
+                y: Math.min(event.clientY, window.innerHeight - (44 + itemCount * 36)),
               });
             }}
             onClick={() => onSelect(session)}
@@ -136,25 +146,95 @@ export function SessionTabs({
           </button>
         );
       })}
-      {contextAction && contextMenu ? (
+      {(contextAction || noteAction) && contextMenu ? (
         <div
           className="session-tab-context-menu"
           onClick={(event) => event.stopPropagation()}
           role="menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          <button
-            className="session-tab-context-menu-item"
-            onClick={() => {
-              contextAction.onSelect(contextMenu.session);
-              setContextMenu(null);
-            }}
-            role="menuitem"
-            type="button"
+          {contextAction ? (
+            <button
+              className="session-tab-context-menu-item"
+              onClick={() => {
+                contextAction.onSelect(contextMenu.session);
+                setContextMenu(null);
+              }}
+              role="menuitem"
+              type="button"
+            >
+              {contextAction.icon === 'drafts' ? <FileEdit size={14} /> : <MessageSquare size={14} />}
+              <span>{contextAction.label}</span>
+            </button>
+          ) : null}
+          {noteAction ? (
+            <button
+              className="session-tab-context-menu-item"
+              onClick={() => {
+                setEditNote({ session: contextMenu.session, value: contextMenu.session.title });
+                setContextMenu(null);
+                setTimeout(() => noteInputRef.current?.select(), 30);
+              }}
+              role="menuitem"
+              type="button"
+            >
+              <Pencil size={14} />
+              <span>编辑备注</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {noteAction && editNote ? (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40"
+          onClick={() => setEditNote(null)}
+        >
+          <div
+            className="bg-white rounded-xl p-6 shadow-2xl w-[340px] max-w-[90vw]"
+            onClick={(event) => event.stopPropagation()}
           >
-            {contextAction.icon === 'drafts' ? <FileEdit size={14} /> : <MessageSquare size={14} />}
-            <span>{contextAction.label}</span>
-          </button>
+            <h2 className="text-sm font-bold text-foreground mb-1">编辑会话备注</h2>
+            <p className="text-xs text-muted-foreground mb-3">留空则恢复自动标题</p>
+            <input
+              ref={noteInputRef}
+              autoFocus
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30 mb-4"
+              maxLength={120}
+              onChange={(event) => setEditNote({ ...editNote, value: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  noteAction.onSave(editNote.session, editNote.value);
+                  setEditNote(null);
+                }
+                if (event.key === 'Escape') {
+                  setEditNote(null);
+                }
+              }}
+              placeholder="输入备注名称…"
+              type="text"
+              value={editNote.value}
+            />
+            <div className="flex gap-2 justify-end">
+              <button
+                className="px-3 py-1.5 rounded-lg text-sm font-bold text-muted-foreground hover:bg-muted/60 transition-colors"
+                onClick={() => setEditNote(null)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className="px-3 py-1.5 rounded-lg text-sm font-bold bg-primary text-white hover:bg-primary/90 transition-colors"
+                onClick={() => {
+                  noteAction.onSave(editNote.session, editNote.value);
+                  setEditNote(null);
+                }}
+                type="button"
+              >
+                保存
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </section>

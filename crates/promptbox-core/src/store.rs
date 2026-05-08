@@ -113,6 +113,17 @@ impl PromptStore {
         sessions::delete_session(&connection, provider, session_id, &self.attachment_root())
     }
 
+    pub fn set_session_note(
+        &self,
+        provider: &str,
+        session_id: &str,
+        note: &str,
+    ) -> Result<(), String> {
+        let connection = self.open_connection()?;
+        migrate(&connection)?;
+        sessions::set_session_note(&connection, provider, session_id, note)
+    }
+
     pub fn get_draft(&self, provider: &str, session_id: &str) -> Result<DraftState, String> {
         let connection = self.open_connection()?;
         migrate(&connection)?;

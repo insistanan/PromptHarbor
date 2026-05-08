@@ -236,6 +236,16 @@ export function App() {
     setSelectedSession(session);
     setActiveView('sessions');
   };
+  const editSessionNote = (session: SessionListItem, note: string) => {
+    api
+      .setSessionNote({ provider: session.provider, sessionId: session.sessionId, note })
+      .then(() => api.listSessions<SessionList>())
+      .then((nextSessions) => {
+        setSessions(nextSessions);
+        setSelectedSession(findSession(nextSessions, session.provider, session.sessionId));
+      })
+      .catch((reason) => setError(String(reason)));
+  };
   return (
     <main className="app-shell" aria-label="PromptHarbor 工作区">
       <aside className="left-rail" aria-label="主导航">
@@ -338,6 +348,7 @@ export function App() {
               <SessionBrowser
                 {...sessionBrowser.sessionBrowserProps}
                 onArchiveSelectedSession={archiveSelectedSession}
+                onEditSessionNote={editSessionNote}
                 onOpenSessionDrafts={openSessionDrafts}
               />
             ) : null}

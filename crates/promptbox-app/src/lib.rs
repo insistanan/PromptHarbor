@@ -37,6 +37,7 @@ pub fn run() {
             commands::sessions::list_sessions,
             commands::sessions::archive_session,
             commands::sessions::delete_session,
+            commands::sessions::set_session_note,
             commands::drafts::get_draft,
             commands::drafts::list_drafts,
             commands::drafts::get_draft_by_id,
