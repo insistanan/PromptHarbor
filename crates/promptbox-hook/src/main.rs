@@ -110,18 +110,87 @@ fn provider_from_args(args: &[String]) -> Result<Provider, String> {
 }
 
 fn read_hook_stdin() -> Result<String, String> {
-    let mut input = String::new();
-    io::stdin()
-        .lock()
-        .take((MAX_HOOK_BODY_BYTES + 1) as u64)
-        .read_to_string(&mut input)
-        .map_err(|error| format!("读取 hook stdin 失败：{error}"))?;
+    collect_complete_json_input(io::stdin().lock())
+}
 
-    if input.trim().is_empty() {
-        return Err("hook stdin 为空".to_string());
+fn collect_complete_json_input<R: Read>(mut reader: R) -> Result<String, String> {
+    // Codex 在 Windows 下可能会延后关闭 hook stdin；这里只读到首个完整 JSON 对象，
+    // 避免 hook 进程为了等待 EOF 一直挂到 Codex 退出时才被强制清理。
+    let mut input = Vec::new();
+    let mut chunk = [0_u8; 1];
+    let mut started = false;
+    let mut object_depth = 0_usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    loop {
+        let read = reader
+            .read(&mut chunk)
+            .map_err(|error| format!("读取 hook stdin 失败：{error}"))?;
+        if read == 0 {
+            break;
+        }
+
+        let byte = chunk[0];
+        if !started {
+            if byte.is_ascii_whitespace() {
+                continue;
+            }
+            if byte != b'{' {
+                return Err("hook stdin 根节点必须是 JSON object".to_string());
+            }
+            started = true;
+            object_depth = 1;
+            push_hook_byte(&mut input, byte)?;
+            continue;
+        }
+
+        push_hook_byte(&mut input, byte)?;
+
+        if in_string {
+            match byte {
+                b'\\' if !escaped => escaped = true,
+                b'"' if !escaped => in_string = false,
+                _ => escaped = false,
+            }
+            continue;
+        }
+
+        match byte {
+            b'"' => in_string = true,
+            b'{' => object_depth += 1,
+            b'}' => {
+                object_depth = object_depth
+                    .checked_sub(1)
+                    .ok_or_else(|| "hook stdin JSON 结构非法".to_string())?;
+                if object_depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
     }
 
-    Ok(input)
+    if !started {
+        return Err("hook stdin 为空".to_string());
+    }
+    if object_depth != 0 || in_string {
+        return Err("hook stdin JSON 未完整结束".to_string());
+    }
+
+    String::from_utf8(input).map_err(|error| format!("hook stdin 不是有效 UTF-8：{error}"))
+}
+
+fn push_hook_byte(input: &mut Vec<u8>, byte: u8) -> Result<(), String> {
+    input.push(byte);
+    if input.len() > MAX_HOOK_BODY_BYTES {
+        return Err(format!(
+            "hook 输入超过限制：{} bytes，大于 {} bytes",
+            input.len(),
+            MAX_HOOK_BODY_BYTES
+        ));
+    }
+    Ok(())
 }
 
 fn deliver_event(config: &PromptBoxConfig, event: &PromptEvent) -> Result<(), String> {
@@ -159,5 +228,57 @@ fn deliver_event(config: &PromptBoxConfig, event: &PromptEvent) -> Result<(), St
         Ok(())
     } else {
         Err("本地采集端点返回非 2xx 状态".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_complete_json_input;
+    use std::io::Cursor;
+
+    #[test]
+    fn collect_complete_json_input_stops_after_first_object() {
+        let input = Cursor::new(br#"  {"session_id":"demo","prompt":"hello"} trailing"#.to_vec());
+        let parsed = collect_complete_json_input(input).unwrap();
+
+        assert_eq!(parsed, r#"{"session_id":"demo","prompt":"hello"}"#);
+    }
+
+    #[test]
+    fn collect_complete_json_input_keeps_nested_content() {
+        let input = Cursor::new(
+            br#"{"session_id":"demo","prompt":"hello \"world\"","meta":{"items":[1,2,3]}}"#
+                .to_vec(),
+        );
+        let parsed = collect_complete_json_input(input).unwrap();
+
+        assert_eq!(
+            parsed,
+            r#"{"session_id":"demo","prompt":"hello \"world\"","meta":{"items":[1,2,3]}}"#
+        );
+    }
+
+    #[test]
+    fn collect_complete_json_input_rejects_empty_stdin() {
+        let error = collect_complete_json_input(Cursor::new(Vec::<u8>::new())).unwrap_err();
+
+        assert_eq!(error, "hook stdin 为空");
+    }
+
+    #[test]
+    fn collect_complete_json_input_rejects_incomplete_json() {
+        let error =
+            collect_complete_json_input(Cursor::new(br#"{"session_id":"demo""#.to_vec()))
+                .unwrap_err();
+
+        assert_eq!(error, "hook stdin JSON 未完整结束");
+    }
+
+    #[test]
+    fn collect_complete_json_input_rejects_non_object_root() {
+        let error =
+            collect_complete_json_input(Cursor::new(br#"["not","object"]"#.to_vec())).unwrap_err();
+
+        assert_eq!(error, "hook stdin 根节点必须是 JSON object");
     }
 }

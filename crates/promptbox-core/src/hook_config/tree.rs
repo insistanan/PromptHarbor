@@ -165,7 +165,8 @@ fn command_matches_promptbox(command: &str, provider: &str) -> bool {
     let lower = command.to_ascii_lowercase();
     let provider = provider.to_ascii_lowercase();
     let generated_shape = if cfg!(windows) {
-        lower.contains("cmd /d /s /c") && lower.contains("exit /b 0")
+        lower.trim_start().starts_with('"')
+            || (lower.contains("cmd /d /s /c") && lower.contains("exit /b 0"))
     } else {
         lower.trim_start().starts_with('"')
     };

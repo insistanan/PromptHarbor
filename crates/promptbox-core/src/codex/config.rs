@@ -89,13 +89,13 @@ pub(in crate::codex) fn ensure_codex_hooks_enabled(
     let features_table = features
         .as_table_mut()
         .ok_or_else(|| "Codex CLI config.toml 中的 [features] 不是 table".to_string())?;
-    features_table.insert("codex_hooks".to_string(), toml::Value::Boolean(true));
+    features_table.insert("hooks".to_string(), toml::Value::Boolean(true));
     Ok(())
 }
 
 pub(in crate::codex) fn codex_hooks_enabled(root: &toml::Value) -> bool {
     root.get("features")
-        .and_then(|features| features.get("codex_hooks"))
+        .and_then(|features| features.get("hooks"))
         .and_then(toml::Value::as_bool)
         .unwrap_or(false)
 }
@@ -106,12 +106,12 @@ pub(in crate::codex) fn codex_status_message(
 ) -> String {
     match (hook_installed, codex_hooks_enabled) {
         (true, true) => {
-            "Codex CLI 用户级 hook 已安装，codex_hooks 已开启；已运行的 Codex CLI 需要新开窗口后生效"
+            "Codex CLI 用户级 hook 已安装，hooks 已开启；已运行的 Codex CLI 需要新开窗口后生效"
                 .to_string()
         }
-        (true, false) => "Codex CLI hook 已安装，但 codex_hooks 尚未开启".to_string(),
-        (false, true) => "codex_hooks 已开启，但 Codex CLI hook 未安装".to_string(),
-        (false, false) => "Codex CLI hook 未安装，codex_hooks 尚未开启".to_string(),
+        (true, false) => "Codex CLI hook 已安装，但 hooks 尚未开启".to_string(),
+        (false, true) => "hooks 已开启，但 Codex CLI hook 未安装".to_string(),
+        (false, false) => "Codex CLI hook 未安装，hooks 尚未开启".to_string(),
     }
 }
 

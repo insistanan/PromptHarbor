@@ -303,13 +303,13 @@ MVP 默认安装 Claude Code 的 `UserPromptSubmit` hook。
 
 ### 8.3 Codex CLI
 
-MVP 默认安装 Codex CLI 的 `UserPromptSubmit` hook，并检测 `codex_hooks` 是否开启。
+MVP 默认安装 Codex CLI 的 `UserPromptSubmit` hook，并检测 `hooks` 是否开启。
 
 Codex 需要：
 
 ```toml
 [features]
-codex_hooks = true
+hooks = true
 ```
 
 关键字段：
@@ -704,7 +704,7 @@ MVP 能力：
 - 显示本地采集端点地址和采集状态。
 - 检测 Claude Code 用户级 hook 是否已安装。
 - 检测 Codex CLI 用户级 hook 是否已安装。
-- 检测 Codex `codex_hooks` 是否开启。
+- 检测 Codex `hooks` 是否开启。
 - 一键写入用户级 hook 配置。
 - 写入前备份原文件。
 - 保留用户已有 hooks 和未知字段。
@@ -844,7 +844,7 @@ MVP 不做历史导入。
 ### M3：配置与隐私控制
 
 - 配置向导检测 Claude Code hook。
-- 配置向导检测 Codex CLI hook 与 `codex_hooks`。
+- 配置向导检测 Codex CLI hook 与 `hooks`。
 - 一键安装用户级 `UserPromptSubmit` hook。
 - 项目级配置片段展示。
 - 采集状态显示。
@@ -913,7 +913,7 @@ prompt 可能包含敏感信息。
 
 - Claude Code 的 `UserPromptSubmit` 可提供 `hook_event_name`、`session_id`、`cwd`、`transcript_path`、`prompt` 等字段，PromptHarbor 能用 `provider + session_id` 创建或更新会话，并只记录用户 prompt。
 - Claude Code 用户级 settings 写入时保留已有 hooks 和未知字段；PromptHarbor 生成的 hook 命令使用 `promptbox-hook.exe` 绝对路径，并能在 Windows 路径场景下被 Claude Code 调用。
-- Codex CLI 需要开启 `codex_hooks`，PromptHarbor 的配置向导会写入用户级 hooks 配置并开启该 feature flag；Codex `UserPromptSubmit` 能被采集并归一化为同一套会话和 prompt 历史模型。
+- Codex CLI 需要开启 `hooks`，PromptHarbor 的配置向导会写入用户级 hooks 配置并开启该 feature flag；Codex `UserPromptSubmit` 能被采集并归一化为同一套会话和 prompt 历史模型。
 - Codex CLI hook 采集链路在真实对话中可正常读取 stdin 并提交到本地端点；PromptHarbor 不依赖多个 hook 的执行顺序，并使用 `turn_id` 优先去重，缺少 `turn_id` 时回退到内容 hash 和时间窗口策略。
 - 完整闭环已验证：在 Milkdown 草稿中编写 prompt，复制到 Agent 客户端提交，hook 记录实际发送内容，内容 hash 一致后清空草稿，随后可在历史和搜索中回看。
 - 暂停记录已验证：暂停期间本地端点保持运行但不写入 `sessions`、`prompt_events` 或 `raw_hook_events`；hook 侧设计仍要求配置读取失败或暂停开启时不读取 stdin。

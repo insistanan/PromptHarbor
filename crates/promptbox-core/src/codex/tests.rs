@@ -57,14 +57,15 @@ fn install_user_hook_enables_feature_and_preserves_existing_config() {
     assert!(installed.config_backup_path.is_some());
     assert!(hooks.contains("echo existing"));
     if cfg!(windows) {
-        assert!(hooks.contains("cmd /d /s /c"));
-        assert!(hooks.contains("exit /b 0"));
+        // Codex on Windows 不再使用 cmd 包装，直接调用 exe
+        assert!(!hooks.contains("cmd /d /s /c"));
+        assert!(!hooks.contains("exit /b 0"));
     }
     assert!(hooks.contains("promptbox-hook.exe"));
     assert!(hooks.contains("--provider codex"));
     assert!(config.contains("model = \"gpt-test\""));
     assert!(config.contains("other = true"));
-    assert!(config.contains("codex_hooks = true"));
+    assert!(config.contains("hooks = true"));
 }
 
 #[test]
@@ -100,7 +101,7 @@ fn stale_promptbox_hook_path_is_replaced() {
         }
     });
     write_json(&hooks_path, &root).unwrap();
-    fs::write(&config_path, "[features]\ncodex_hooks = true\n").unwrap();
+    fs::write(&config_path, "[features]\nhooks = true\n").unwrap();
     env::set_var("USERPROFILE", &home);
 
     let detected = detect_codex_user_hook(&current_hook_path).unwrap();
@@ -119,6 +120,58 @@ fn stale_promptbox_hook_path_is_replaced() {
     assert!(serde_json::to_string(&updated)
         .unwrap()
         .contains("echo existing"));
+}
+
+#[cfg(windows)]
+#[test]
+fn legacy_wrapped_promptbox_hook_is_replaced() {
+    let home = isolated_home("codex-legacy-hook");
+    let codex_dir = home.join(".codex");
+    fs::create_dir_all(&codex_dir).unwrap();
+    let hooks_path = codex_dir.join("hooks.json");
+    let config_path = codex_dir.join("config.toml");
+    let current_hook_path = home
+        .join("PromptBox")
+        .join("bin")
+        .join("promptbox-hook.exe");
+    let legacy_command = format!(
+        "cmd /d /s /c \"\"{}\" --provider codex || exit /b 0\"",
+        current_hook_path.to_string_lossy()
+    );
+    let current_command = codex_hook_command(&current_hook_path);
+    let root = json!({
+        "hooks": {
+            "UserPromptSubmit": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": legacy_command
+                        }
+                    ]
+                }
+            ]
+        }
+    });
+    write_json(&hooks_path, &root).unwrap();
+    fs::write(&config_path, "[features]\nhooks = true\n").unwrap();
+    env::set_var("USERPROFILE", &home);
+
+    let detected = detect_codex_user_hook(&current_hook_path).unwrap();
+    assert!(!detected.hook_installed);
+
+    install_codex_user_hook(&current_hook_path).unwrap();
+    let updated = read_json(&hooks_path).unwrap();
+    let updated_text = serde_json::to_string(&updated).unwrap();
+
+    assert!(has_promptbox_hook(&updated, &current_command));
+    assert!(!has_stale_promptbox_hook(
+        &updated,
+        &current_command,
+        "codex"
+    ));
+    assert!(!updated_text.contains("cmd /d /s /c"));
+    assert!(updated_text.contains("--provider codex"));
 }
 
 fn isolated_home(name: &str) -> PathBuf {

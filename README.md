@@ -28,6 +28,106 @@
 - `crates/promptbox-app`：Tauri 应用、本地采集端点、采集入库、命令层、托盘、窗口生命周期和开机启动。
 - `frontend`：React + Vite + Milkdown 工作区，支持会话浏览、草稿编辑、图片暂存、历史查看、搜索和运行设置。
 
+### 安装前端依赖
+
+```powershell
+npm --prefix frontend install
+```
+
+### 开发模式（Tauri dev）
+
+`tauri:dev` 只编译 `promptbox-app`，**不会编译 `promptbox-hook`**。首次启动或改了 hook 代码时，需要先单独构建 hook，否则稳定位置没有兼容版本会报错。
+
+```powershell
+cargo build -p promptbox-hook
+npm --prefix frontend run tauri:dev
+```
+
+`tauri:dev` 实际执行 `cargo tauri dev`，会：
+1. 启动 Vite 前端开发服务器（`http://localhost:5173`）
+2. 编译 `promptbox-app`（debug），产物在 `target/debug/promptbox-app.exe`
+
+> **注意**：`tauri:dev` 只编译 `promptbox-app`，不会编译 `promptbox-hook`。hook 需单独构建。
+>
+> 启动时会检查稳定位置的 hook 是否就绪。如果 `target/debug/promptbox-hook.exe` 不存在（sibling 查找失败）、且稳定位置也没有兼容版本，会报错。
+
+### Hook 路径
+
+Codex CLI / Claude Code 的 hook 配置中 `command` 指向稳定路径，不能指向 `target/` 临时构建目录。
+
+**稳定位置（hook 运行路径）：**
+```
+%APPDATA%\PromptBox\bin\promptbox-hook.exe
+```
+可通过 `PROMPTBOX_HOME` 环境变量覆盖。
+
+**Dev 模式下的 hook 源查找顺序**（`find_hook_source`）：
+1. `PROMPTBOX_HOOK_SOURCE` 环境变量 → 直接指向已构建的 hook
+2. 打包资源 `resources/promptbox-hook.exe`（dev 模式不存在）
+3. 当前进程同目录（sibling 查找）→ `target/debug/promptbox-hook.exe`（需先 `cargo build -p promptbox-hook`）
+
+如果三个源都找不到，但稳定位置已有兼容版本，不会报错也不会覆盖现有文件。
+
+**构建模式（打包发布）**：`resources/promptbox-hook.exe` 随安装包分发，首次启动时复制到稳定位置。
+
+### 更新 hook 可执行文件
+
+改了 hook 代码后：
+
+```powershell
+cargo build -p promptbox-hook
+npm --prefix frontend run tauri:dev
+```
+
+由于 `target/debug/promptbox-hook.exe` 与稳定位置文件内容不同，启动时 `HookBinaryManager` 会自动复制到稳定位置。如果内容相同则跳过。
+
+也可以手动覆盖（无需重启 Tauri，下次 hook 调用时生效）：
+
+```powershell
+Copy-Item -Force "target/debug/promptbox-hook.exe" "$env:APPDATA\PromptBox\bin\promptbox-hook.exe"
+```
+
+### 打包发布
+
+```powershell
+cargo build --release -p promptbox-hook
+New-Item -ItemType Directory -Force -Path "crates/promptbox-app/resources" | Out-Null
+Copy-Item -Force "target/release/promptbox-hook.exe" "crates/promptbox-app/resources/promptbox-hook.exe"
+npm --prefix frontend run tauri:build
+```
+
+`tauri.conf.json` 中 `bundle.resources: ["resources/"]` 会将 `resources/` 目录打进安装包。安装后首次启动时自动同步到稳定位置。
+
+### 仅前端开发（不含 Tauri）
+
+```powershell
+npm --prefix frontend run dev
+```
+
+Vite 开发服务器在 `http://localhost:5173`，纯前端预览，无后端/采集功能。
+
+### 隔离测试 hook 投递
+
+本地采集端点默认监听 `127.0.0.1:9996`。可以设置临时 home 隔离测试：
+
+```powershell
+$env:PROMPTBOX_HOME = Join-Path $PWD ".tmp\promptbox-home-issue3"
+$env:PROMPTBOX_HOOK_SOURCE = Join-Path $PWD "target\debug\promptbox-hook.exe"
+```
+
+hook 的最小输入示例：
+
+```json
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "demo-session",
+  "cwd": "D:\\code\\some\\prompt",
+  "prompt": "测试 PromptHarbor 采集链路"
+}
+```
+
+Windows MVP 实机验证记录见 [MVP 方案设计](docs/promptbox-design.md#23-windows-mvp-实机验证记录)。
+
 ## 当前代码结构
 
 后端核心模块：
@@ -59,62 +159,6 @@ Tauri 应用模块：
 - `frontend/src/features/settings/`：运行状态、运行配置和 hook 设置。
 - `frontend/src/features/shared/`：共享弹窗等通用界面。
 - `frontend/src/types/`：按运行时、会话、草稿、历史和界面状态拆分的前端类型；`frontend/src/appTypes.ts` 继续作为统一导出入口。
-
-PromptBox home 默认路径：
-
-```text
-%APPDATA%\PromptBox
-```
-
-可以通过 `PROMPTBOX_HOME` 覆盖。主程序启动时会创建 `config.toml`、spool/log/bin 目录，并检查：
-
-```text
-<PromptBox home>\bin\promptbox-hook.exe
-```
-
-开发模式下如需让 hook 状态显示为就绪，需要先构建 hook 可执行文件，或用 `PROMPTBOX_HOOK_SOURCE` 指向一个已构建的 `promptbox-hook.exe`。hook 可执行文件必须支持：
-
-```powershell
-promptbox-hook.exe --version
-```
-
-本地采集端点默认监听 `127.0.0.1:9996`。隔离测试 hook 投递与 spool fallback 时，可以先设置临时 home：
-
-```powershell
-$env:PROMPTBOX_HOME = Join-Path $PWD ".tmp\promptbox-home-issue3"
-$env:PROMPTBOX_HOOK_SOURCE = Join-Path $PWD "target\debug\promptbox-hook.exe"
-```
-
-hook 的最小输入示例：
-
-```json
-{
-  "hook_event_name": "UserPromptSubmit",
-  "session_id": "demo-session",
-  "cwd": "D:\\code\\some\\prompt",
-  "prompt": "测试 PromptHarbor 采集链路"
-}
-```
-
-安装前端依赖：
-
-```powershell
-npm --prefix frontend install
-```
-
-启动 Tauri 开发模式：
-
-```powershell
-npm --prefix frontend run tauri:dev
-```
-
-仅启动前端开发服务器：
-
-```powershell
-npm --prefix frontend run dev
-```
-
-Windows MVP 实机验证记录见 [MVP 方案设计](docs/promptbox-design.md#23-windows-mvp-实机验证记录)。
 
 ## 核心概念
 

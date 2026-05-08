@@ -106,7 +106,7 @@ pub(crate) fn install_codex_user_hook(hook_path: &Path) -> Result<CodexHookStatu
         hook_installed: true,
         codex_hooks_enabled: true,
         ready: true,
-        message: "Codex CLI 用户级 hook 已安装，codex_hooks 已开启；已运行的 Codex CLI 需要新开窗口后生效"
+        message: "Codex CLI 用户级 hook 已安装，hooks 已开启；已运行的 Codex CLI 需要新开窗口后生效"
             .to_string(),
         hooks_backup_path: hooks_backup_path.as_ref().map(|path| path_to_string(path)),
         config_backup_path: config_backup_path.as_ref().map(|path| path_to_string(path)),
@@ -144,10 +144,10 @@ pub(crate) fn uninstall_codex_user_hook(hook_path: &Path) -> Result<CodexHookSta
         codex_hooks_enabled,
         ready: false,
         message: if hook_removed {
-            "Codex CLI PromptHarbor hook 已取消；codex_hooks 开关保持原样，其他 hook 不受影响"
+            "Codex CLI PromptHarbor hook 已取消；hooks 开关保持原样，其他 hook 不受影响"
                 .to_string()
         } else {
-            "未发现 Codex CLI PromptHarbor hook；codex_hooks 开关保持原样".to_string()
+            "未发现 Codex CLI PromptHarbor hook；hooks 开关保持原样".to_string()
         },
         hooks_backup_path: hooks_backup_path.as_ref().map(|path| path_to_string(path)),
         config_backup_path: None,

@@ -44,7 +44,7 @@ export function HookSettingsPanel({ item }: { item: RuntimeHookSettingsItem }) {
             <div>
               <dt>实验功能</dt>
               <dd className={status?.codexHooksEnabled ? 'ok-text' : 'warning-text'}>
-                {status?.codexHooksEnabled ? 'codex_hooks 已开启' : 'codex_hooks 未开启'}
+                {status?.codexHooksEnabled ? 'hooks 已开启' : 'hooks 未开启'}
               </dd>
             </div>
           </>
