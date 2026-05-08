@@ -13,7 +13,6 @@ import {
   Boxes,
   CheckCircle2,
   FileArchive,
-  FileText,
   FolderOpen,
   Languages,
   PackagePlus,
@@ -94,6 +93,7 @@ export function SkillsWorkspace({
   const [transferringSkillId, setTransferringSkillId] = useState<string | null>(null);
   const [transferTargetProvider, setTransferTargetProvider] = useState<SkillProvider>('codex');
   const [transferTargetSkillName, setTransferTargetSkillName] = useState('');
+  const [showTransfer, setShowTransfer] = useState(false);
 
   const loadSkills = (
     mode: 'initial' | 'refresh' = 'initial',
@@ -281,12 +281,14 @@ export function SkillsWorkspace({
   useEffect(() => {
     if (!selectedSkill) {
       setTransferTargetSkillName('');
+      setShowTransfer(false);
       return;
     }
 
     const nextTarget = otherProvider(selectedSkill.provider);
     setTransferTargetProvider(nextTarget);
     setTransferTargetSkillName(skillDirName(selectedSkill));
+    setShowTransfer(false);
   }, [selectedSkill?.id]);
 
   const resetZipDropState = () => {
@@ -681,7 +683,7 @@ export function SkillsWorkspace({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1 xl:overflow-hidden xl:pr-0">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1 lg:overflow-hidden lg:pr-0">
       <section className="shrink-0 rounded-[22px] border border-border/50 bg-card/95 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-5">
           <div className="space-y-2">
@@ -708,7 +710,7 @@ export function SkillsWorkspace({
           </button>
         </div>
 
-        <div className="grid gap-3 border-t border-border/40 px-5 py-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-2 border-t border-border/40 px-5 py-3 grid-cols-2 sm:grid-cols-4">
           <MetricTile
             label="当前技能数"
             value={`${providerSkills.length}`}
@@ -762,365 +764,258 @@ export function SkillsWorkspace({
         </div>
       </section>
 
-      <section className="grid grid-cols-1 gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[320px_minmax(0,1fr)_360px]">
-        <aside className="flex flex-col rounded-[22px] border border-border/50 bg-card shadow-sm xl:min-h-0 xl:overflow-hidden">
-          <div className="border-b border-border/40 px-4 py-4">
-            <div className="text-xs font-bold uppercase tracking-[0.22em] text-muted-foreground">
-              已安装技能
-            </div>
-            <p className="mt-1 mb-0 text-sm text-muted-foreground">
-              {loading ? '读取中…' : `${providerSkills.length} 个技能 · ${providerReadonlySkillCount} 个只读`}
-            </p>
-          </div>
-
-          <div className="px-3 py-3 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
+      <section className="grid grid-cols-1 gap-4 lg:min-h-0 lg:flex-1 lg:overflow-hidden lg:grid-cols-[minmax(0,1fr)_260px]">
+        <div className="space-y-3 lg:min-h-0 lg:overflow-y-auto">
+          <div className="flex items-center gap-3 rounded-[22px] border border-border/50 bg-card px-5 py-3 shadow-sm">
+            <span className="shrink-0 text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">
+              选择技能
+            </span>
             {loading ? (
-              <EmptyPanel
-                icon={<RefreshCw className="animate-spin text-muted-foreground" size={18} />}
-                title="正在读取技能目录"
-                body="读取 Claude Code 和 Codex CLI 的本地技能。"
-              />
-            ) : groupedSkills.length ? (
-              <div className="space-y-4">
-                {groupedSkills.map((group) => (
-                  <div className="space-y-2" key={group.sourceKind}>
-                    <div className="px-1 text-[11px] font-bold uppercase tracking-[0.22em] text-muted-foreground">
-                      {sourceSectionLabel(group.sourceKind)}
-                    </div>
-                    <div className="space-y-2">
-                      {group.items.map((skill) => {
-                        const active = selectedSkill?.id === skill.id;
-                        return (
-                          <button
-                            className={cn(
-                              'w-full rounded-2xl border p-3 text-left transition-all',
-                              active
-                                ? 'border-primary/35 bg-primary/[0.06] shadow-sm'
-                                : 'border-border/60 bg-background hover:border-primary/25 hover:bg-secondary/40',
-                            )}
-                            key={skill.id}
-                            onClick={() => setSelectedSkillId(skill.id)}
-                            type="button"
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-bold text-foreground">
-                                  {skill.name}
-                                </div>
-                                <div className="mt-1 text-[11px] text-muted-foreground">
-                                  {skill.sourceLabel}
-                                </div>
-                              </div>
-                              <span
-                                className={cn(
-                                  'shrink-0 rounded-full px-2 py-1 text-[10px] font-bold',
-                                  skill.sourceKind === 'user'
-                                    ? 'bg-emerald-50 text-emerald-700'
-                                    : 'bg-slate-100 text-slate-600',
-                                )}
-                              >
-                                {skill.sourceKind === 'user' ? '可管理' : '只读'}
-                              </span>
-                            </div>
-                            <p className="mt-2 mb-0 text-xs leading-5 text-muted-foreground">
-                              {compactText(skill.translatedDescription || skill.description || '未提供描述', 120)}
-                            </p>
-                            <div className="mt-3 flex items-center justify-between gap-3">
-                              <div className="truncate text-[11px] text-primary/85">
-                                {skill.translatedName || '未缓存中文标题'}
-                              </div>
-                              {skill.translatedAt ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700">
-                                  <CheckCircle2 size={11} />
-                                  已译
-                                </span>
-                              ) : null}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <span className="flex-1 text-sm text-muted-foreground">读取中…</span>
             ) : (
-              <EmptyPanel
-                icon={<Sparkles className="text-muted-foreground" size={18} />}
-                title="当前提供者下没有技能"
-                body="切换到另一个提供者，或先导入一份技能包。"
-              />
+              <select
+                className="h-9 flex-1 rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
+                disabled={!providerSkills.length}
+                onChange={(event) => setSelectedSkillId(event.currentTarget.value || null)}
+                value={selectedSkillId ?? ''}
+              >
+                {!providerSkills.length ? (
+                  <option value="">当前提供者下没有技能</option>
+                ) : (
+                  groupedSkills.map((group) => (
+                    <optgroup key={group.sourceKind} label={sourceSectionLabel(group.sourceKind)}>
+                      {group.items.map((skill) => (
+                        <option key={skill.id} value={skill.id}>
+                          {`${skill.name} · ${skill.sourceKind === 'user' ? '可管理' : '只读'}${skill.translatedName ? ` · ${skill.translatedName}` : ''}`}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))
+                )}
+              </select>
             )}
+            <span className="shrink-0 text-xs text-muted-foreground">
+              共 {providerSkills.length} 个
+            </span>
           </div>
-        </aside>
 
-        <div className="xl:min-h-0 xl:overflow-y-auto">
-          {!selectedSkill ? (
-            <div className="flex h-full min-h-[420px] items-center justify-center rounded-[22px] border border-border/50 bg-card px-8 text-center shadow-sm">
-              <div>
-                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-secondary text-muted-foreground">
-                  <FileText size={22} />
-                </div>
-                <p className="mb-1 text-base font-bold text-foreground">选择一个技能查看详情</p>
-                <p className="mb-0 text-sm text-muted-foreground">
-                  中间区域会显示说明、翻译状态和技能管理动作。
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-4">
+          {selectedSkill ? (
+            <div className="space-y-3">
               <section className="rounded-[22px] border border-border/50 bg-card shadow-sm">
-                <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border/40 px-5 py-5">
-                  <div className="min-w-0 space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="truncate text-[28px] font-bold leading-none text-foreground">
-                        {selectedSkill.translatedName || selectedSkill.name}
-                      </h3>
-                      <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] font-bold text-muted-foreground">
-                        {selectedSkill.providerLabel}
+                <div className="px-5 py-4">
+                  <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                    <h3 className="text-lg font-bold leading-snug text-foreground">
+                      {selectedSkill.translatedName || selectedSkill.name}
+                    </h3>
+                    <button
+                      className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-0.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                      onClick={() => {
+                        navigator.clipboard.writeText(selectedSkill.name).then(
+                          () => onNotice(`已复制技能名称：${selectedSkill.name}`),
+                          (reason) => onError(`复制失败：${reason}`),
+                        );
+                      }}
+                      type="button"
+                      title="复制技能名称"
+                    >
+                      复制名称
+                    </button>
+                    <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[11px] font-bold text-muted-foreground">
+                      {selectedSkill.providerLabel}
+                    </span>
+                    <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[11px] font-bold text-muted-foreground">
+                      {selectedSkill.sourceLabel}
+                    </span>
+                    {selectedSkill.sourceKind !== 'user' ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">
+                        <Shield size={11} />
+                        只读
                       </span>
-                      <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] font-bold text-muted-foreground">
-                        {selectedSkill.sourceLabel}
-                      </span>
-                      {selectedSkill.sourceKind !== 'user' ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-700">
-                          <Shield size={12} />
-                          只读
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="mb-0 text-sm leading-6 text-muted-foreground">
-                      {selectedSkill.translatedDescription || selectedSkill.description || '未提供描述'}
-                    </p>
-                    <p className="mb-0 truncate text-xs text-muted-foreground" title={selectedSkill.skillDir}>
-                      {selectedSkill.skillDir}
-                    </p>
+                    ) : null}
                   </div>
+                  <p className="mb-0 text-sm leading-5 text-muted-foreground">
+                    {selectedSkill.translatedDescription || selectedSkill.description || '未提供描述'}
+                  </p>
+                </div>
 
+                <div className="flex flex-wrap items-center gap-2 border-t border-border/40 px-5 py-3">
                   <button
-                    className="secondary-action inline-flex items-center gap-2"
+                    className="secondary-action inline-flex items-center gap-1.5"
                     onClick={openSelectedSkillDirectory}
                     type="button"
                   >
-                    <FolderOpen size={15} />
+                    <FolderOpen size={13} />
                     打开目录
                   </button>
-                </div>
-
-                <div className="grid gap-4 px-5 py-5 lg:grid-cols-2">
-                  <div className="rounded-2xl border border-border/50 bg-background p-4">
-                    <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.22em] text-muted-foreground">
-                      <Languages size={14} />
-                      翻译缓存
-                    </div>
-                    <p className="mb-1 text-sm font-semibold text-foreground">
-                      {selectedSkill.translatedName || '未缓存中文标题'}
-                    </p>
-                    <p className="mb-3 text-sm leading-6 text-muted-foreground">
-                      {selectedSkill.translatedDescription || '还没有中文摘要，可手动生成并缓存。'}
-                    </p>
-                    {selectedSkill.translatedAt ? (
-                      <p className="mb-3 text-xs text-muted-foreground">
-                        最近缓存：{selectedSkill.translatedProviderName || '未知供应商'} ·{' '}
-                        {formatTimestamp(selectedSkill.translatedAt)}
-                      </p>
-                    ) : null}
-                    <div className="space-y-3">
-                      <label className="block">
-                        <span className="mb-1 block text-xs font-semibold text-muted-foreground">
-                          翻译供应商
-                        </span>
-                        <select
-                          className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-                          disabled={providersLoading || !translationProviders.length}
-                          onChange={(event) => setSelectedTranslationProviderId(event.currentTarget.value)}
-                          value={selectedTranslationProviderId}
-                        >
-                          {translationProviders.length ? (
-                            translationProviders.map((provider) => (
-                              <option key={provider.id} value={provider.id}>
-                                {provider.name} · {provider.defaultModel}
-                              </option>
-                            ))
-                          ) : (
-                            <option value="">
-                              {providersLoading ? '读取供应商中…' : '没有可用的已启用供应商'}
-                            </option>
-                          )}
-                        </select>
-                      </label>
+                  <button
+                    className="secondary-action inline-flex items-center gap-1.5"
+                    disabled={exportingSkillId === selectedSkill.id}
+                    onClick={exportSelectedSkill}
+                    type="button"
+                  >
+                    <Archive size={13} />
+                    {exportingSkillId === selectedSkill.id ? '导出中' : '备份到资产库'}
+                  </button>
+                  {selectedSkill.sourceKind === 'user' ? (
+                    <>
                       <button
-                        className="primary-action w-full"
-                        disabled={!canTranslate}
-                        onClick={translateSelectedSkill}
+                        className={cn(
+                          'secondary-action inline-flex items-center gap-1.5',
+                          showTransfer ? 'border-primary/40 bg-primary/[0.06] text-primary' : '',
+                        )}
+                        onClick={() => setShowTransfer((v) => !v)}
                         type="button"
                       >
-                        {translatingSkillId === selectedSkill.id
-                          ? '翻译中'
-                          : selectedSkill.translatedAt
-                            ? '更新翻译'
-                            : '翻译并缓存'}
+                        <ArrowRightLeft size={13} />
+                        转移
                       </button>
-                      <p className="mb-0 text-xs leading-5 text-muted-foreground">
-                        同一份技能内容会优先命中缓存；已有缓存时点击按钮会重新翻译并覆盖。
-                      </p>
+                      <button
+                        className="inline-flex min-h-[34px] items-center gap-1.5 rounded-[7px] border border-rose-200 bg-white px-3 py-1.5 text-sm font-semibold text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-default disabled:opacity-60"
+                        disabled={deletingSkillId === selectedSkill.id}
+                        onClick={deleteSelectedSkill}
+                        type="button"
+                      >
+                        <Trash2 size={13} />
+                        {deletingSkillId === selectedSkill.id ? '删除中' : '删除技能'}
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+
+                {showTransfer && selectedSkill.sourceKind === 'user' ? (
+                  <div className="flex flex-wrap items-end gap-3 border-t border-border/40 bg-secondary/30 px-5 py-3">
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-semibold text-muted-foreground">目标提供者</span>
+                      <select
+                        className="h-9 rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
+                        onChange={(event) =>
+                          setTransferTargetProvider(event.currentTarget.value as SkillProvider)
+                        }
+                        value={transferTargetProvider}
+                      >
+                        {providerOrder
+                          .filter((provider) => provider !== selectedSkill.provider)
+                          .map((provider) => (
+                            <option key={provider} value={provider}>
+                              {providerLabel(provider)}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label className="block flex-1" style={{ minWidth: 140 }}>
+                      <span className="mb-1 block text-xs font-semibold text-muted-foreground">转移后目录名</span>
+                      <input
+                        className="h-9 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
+                        onChange={(event) => setTransferTargetSkillName(event.currentTarget.value)}
+                        value={transferTargetSkillName}
+                      />
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        className="primary-action"
+                        disabled={!canTransferSelectedSkill}
+                        onClick={transferSelectedSkill}
+                        type="button"
+                      >
+                        {transferringSkillId === selectedSkill.id ? '转移中' : '开始转移'}
+                      </button>
+                      <button
+                        className="secondary-action"
+                        onClick={() => setShowTransfer(false)}
+                        type="button"
+                      >
+                        取消
+                      </button>
                     </div>
                   </div>
+                ) : null}
 
-                  <div className="rounded-2xl border border-border/50 bg-background p-4">
-                    <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.22em] text-muted-foreground">
-                      <Archive size={14} />
-                      管理动作
-                    </div>
-
-                    <div className="space-y-4">
-                      <div className="rounded-xl border border-border/50 bg-muted/20 p-3">
-                        <div className="mb-2 text-sm font-semibold text-foreground">导出到资产库</div>
-                        <p className="mb-3 text-xs leading-5 text-muted-foreground">
-                          给当前技能再存一份备份包，后续可以重复安装到 Claude Code 或 Codex CLI。
-                        </p>
-                        <button
-                          className="secondary-action w-full"
-                          disabled={exportingSkillId === selectedSkill.id}
-                          onClick={exportSelectedSkill}
-                          type="button"
-                        >
-                          {exportingSkillId === selectedSkill.id ? '导出中' : '备份到 PromptHarbor 资产库'}
-                        </button>
-                      </div>
-
-                      {selectedSkill.sourceKind === 'user' ? (
-                        <>
-                          <div className="rounded-xl border border-border/50 bg-muted/20 p-3">
-                            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-                              <ArrowRightLeft size={14} />
-                              转移到另一个提供者
-                            </div>
-                            <div className="grid gap-3">
-                              <label className="block">
-                                <span className="mb-1 block text-xs font-semibold text-muted-foreground">
-                                  目标提供者
-                                </span>
-                                <select
-                                  className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-                                  onChange={(event) =>
-                                    setTransferTargetProvider(event.currentTarget.value as SkillProvider)
-                                  }
-                                  value={transferTargetProvider}
-                                >
-                                  {providerOrder
-                                    .filter((provider) => provider !== selectedSkill.provider)
-                                    .map((provider) => (
-                                      <option key={provider} value={provider}>
-                                        {providerLabel(provider)}
-                                      </option>
-                                    ))}
-                                </select>
-                              </label>
-                              <label className="block">
-                                <span className="mb-1 block text-xs font-semibold text-muted-foreground">
-                                  转移后的目录名
-                                </span>
-                                <input
-                                  className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-                                  onChange={(event) => setTransferTargetSkillName(event.currentTarget.value)}
-                                  value={transferTargetSkillName}
-                                />
-                              </label>
-                              <button
-                                className="primary-action w-full"
-                                disabled={!canTransferSelectedSkill}
-                                onClick={transferSelectedSkill}
-                                type="button"
-                              >
-                                {transferringSkillId === selectedSkill.id ? '转移中' : '开始转移'}
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="rounded-xl border border-rose-200 bg-rose-50 p-3">
-                            <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-rose-700">
-                              <Trash2 size={14} />
-                              删除当前技能
-                            </div>
-                            <p className="mb-3 text-xs leading-5 text-rose-700/90">
-                              只删除当前提供者下的用户技能目录，不会动到资产库里的备份包。
-                            </p>
-                            <button
-                              className="inline-flex min-h-[34px] w-full items-center justify-center gap-2 rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-default disabled:opacity-60"
-                              disabled={deletingSkillId === selectedSkill.id}
-                              onClick={deleteSelectedSkill}
-                              type="button"
-                            >
-                              {deletingSkillId === selectedSkill.id ? '删除中' : '删除技能'}
-                            </button>
-                          </div>
-                        </>
+                <div className="flex flex-wrap items-center gap-3 border-t border-border/40 px-5 py-3">
+                  <div className="flex shrink-0 items-center gap-1.5 text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">
+                    <Languages size={13} />
+                    翻译
+                  </div>
+                  {selectedSkill.translatedAt ? (
+                    <span className="inline-flex min-w-0 items-center gap-1 text-xs font-semibold text-emerald-700">
+                      <CheckCircle2 size={12} />
+                      <span className="whitespace-normal break-words">{selectedSkill.translatedName}</span>
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">未缓存中文标题</span>
+                  )}
+                  <div className="ml-auto flex items-center gap-2">
+                    <select
+                      className="h-8 rounded-lg border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-primary"
+                      disabled={providersLoading || !translationProviders.length}
+                      onChange={(event) => setSelectedTranslationProviderId(event.currentTarget.value)}
+                      value={selectedTranslationProviderId}
+                    >
+                      {translationProviders.length ? (
+                        translationProviders.map((provider) => (
+                          <option key={provider.id} value={provider.id}>
+                            {provider.name} · {provider.defaultModel}
+                          </option>
+                        ))
                       ) : (
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                          <div className="mb-2 flex items-center gap-2 font-semibold">
-                            <Shield size={14} />
-                            当前技能为只读来源
-                          </div>
-                          <p className="mb-0 text-xs leading-5 text-slate-600">
-                            系统内置或其他非用户来源技能不支持直接删除和转移，但可以先备份到资产库，再安装成一份可管理副本。
-                          </p>
-                        </div>
+                        <option value="">
+                          {providersLoading ? '读取供应商中…' : '没有可用的已启用供应商'}
+                        </option>
                       )}
-                    </div>
+                    </select>
+                    <button
+                      className="primary-action"
+                      disabled={!canTranslate}
+                      onClick={translateSelectedSkill}
+                      type="button"
+                    >
+                      {translatingSkillId === selectedSkill.id
+                        ? '翻译中'
+                        : selectedSkill.translatedAt
+                          ? '更新翻译'
+                          : '翻译并缓存'}
+                    </button>
                   </div>
+                </div>
+
+                <div
+                  className="truncate border-t border-border/40 px-5 py-2 text-xs text-muted-foreground"
+                  title={selectedSkill.skillDir}
+                >
+                  {selectedSkill.skillDir}
                 </div>
               </section>
 
-              <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-                <div className="overflow-hidden rounded-[22px] border border-border/50 bg-card shadow-sm xl:min-h-0">
-                  <div className="flex items-center justify-between gap-3 border-b border-border/40 px-4 py-4">
-                    <div>
-                      <div className="text-xs font-bold uppercase tracking-[0.22em] text-muted-foreground">
-                        SKILL.md
-                      </div>
-                      <p className="mt-1 mb-0 truncate text-xs text-muted-foreground" title={selectedSkill.skillFile}>
-                        {selectedSkill.skillFile}
-                      </p>
+              <section className="overflow-hidden rounded-[22px] border border-border/50 bg-card shadow-sm">
+                <div className="flex items-center justify-between gap-3 border-b border-border/40 px-4 py-3">
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-[0.22em] text-muted-foreground">
+                      SKILL.md
                     </div>
-                    {detailLoading ? (
-                      <span className="text-xs font-semibold text-muted-foreground">读取中…</span>
-                    ) : null}
-                  </div>
-                  <div className="max-h-[calc(100vh-360px)] overflow-auto px-4 py-4">
-                    <pre className="m-0 whitespace-pre-wrap break-words font-mono text-xs leading-6 text-foreground">
-                      {selectedSkillDetail?.contentMd || '正在读取技能说明内容…'}
-                    </pre>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="rounded-[22px] border border-border/50 bg-card p-4 shadow-sm">
-                    <div className="mb-3 text-xs font-bold uppercase tracking-[0.22em] text-muted-foreground">
-                      技能信息
-                    </div>
-                    <div className="space-y-3 text-sm text-foreground">
-                      <InfoRow label="原始名称" value={selectedSkill.name} />
-                      <InfoRow label="本地状态" value={selectedSkill.localStatus} />
-                      <InfoRow label="相对路径" value={selectedSkill.relativePath} mono />
-                      <InfoRow label="内容哈希" value={selectedSkill.contentHash} mono />
-                    </div>
-                  </div>
-
-                  <div className="rounded-[22px] border border-border/50 bg-card p-4 shadow-sm">
-                    <div className="mb-3 text-xs font-bold uppercase tracking-[0.22em] text-muted-foreground">
-                      原始描述
-                    </div>
-                    <p className="mb-0 text-sm leading-6 text-muted-foreground">
-                      {selectedSkill.description || '未提供原始描述'}
+                    <p className="mb-0 mt-0.5 truncate text-xs text-muted-foreground" title={selectedSkill.skillFile}>
+                      {selectedSkill.relativePath}
                     </p>
                   </div>
+                  {detailLoading ? (
+                    <span className="text-xs font-semibold text-muted-foreground">读取中…</span>
+                  ) : null}
+                </div>
+                <div className="max-h-[calc(100vh-360px)] lg:max-h-none overflow-auto px-4 py-4">
+                  <pre className="m-0 whitespace-pre-wrap break-words font-mono text-xs leading-6 text-foreground">
+                    {selectedSkillDetail?.contentMd || '正在读取技能说明内容…'}
+                  </pre>
                 </div>
               </section>
             </div>
-          )}
+          ) : !loading ? (
+            <div className="flex min-h-[160px] items-center justify-center rounded-[22px] border border-border/50 bg-card px-8 text-center shadow-sm">
+              <p className="mb-0 text-sm text-muted-foreground">
+                切换到另一个提供者，或先导入一份技能包。
+              </p>
+            </div>
+          ) : null}
         </div>
 
-        <aside className="flex flex-col rounded-[22px] border border-border/50 bg-card shadow-sm xl:min-h-0 xl:overflow-hidden">
+        <aside className="flex flex-col rounded-[22px] border border-border/50 bg-card shadow-sm lg:min-h-0 lg:overflow-hidden">
           <div className="border-b border-border/40 px-4 py-4">
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.22em] text-muted-foreground">
               <Boxes size={14} />
@@ -1131,7 +1026,7 @@ export function SkillsWorkspace({
             </p>
           </div>
 
-          <div className="px-4 py-4 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
+          <div className="px-4 py-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             <div className="space-y-4">
               <div className="rounded-2xl border border-border/50 bg-background p-4">
                 <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.22em] text-muted-foreground">
@@ -1437,23 +1332,6 @@ function EmptyPanel({
       </div>
       <p className="mb-1 text-sm font-bold text-foreground">{title}</p>
       <p className="mb-0 text-xs leading-5 text-muted-foreground">{body}</p>
-    </div>
-  );
-}
-
-function InfoRow({
-  label,
-  value,
-  mono = false,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div>
-      <div className="text-xs font-semibold text-muted-foreground">{label}</div>
-      <div className={cn('mt-1 break-all', mono ? 'font-mono text-xs' : '')}>{value}</div>
     </div>
   );
 }
