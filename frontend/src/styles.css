@@ -862,6 +862,7 @@ h3 {
 
 .provider-panel {
   grid-column: 1 / -1;
+  overflow: hidden;
 }
 
 .provider-toolbar {
@@ -962,6 +963,43 @@ h3 {
   font-size: 12px;
   line-height: 1.45;
   white-space: normal;
+}
+
+.provider-split-layout {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  flex: 1;
+  min-height: 200px;
+}
+
+.provider-left-col {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  border-right: 1px solid #e0e6eb;
+  max-height: 420px;
+}
+
+.provider-left-col .provider-list {
+  border-bottom: none;
+  flex: 1;
+}
+
+.provider-right-col {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  max-height: 420px;
+}
+
+.provider-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #dfe4e9;
+  padding: 10px 14px;
+  flex: none;
 }
 
 .runtime-list {
